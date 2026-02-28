@@ -14,6 +14,10 @@ class _JourneyEntryPageState extends State<JourneyEntryPage> {
   final _dateCtrl = TextEditingController();
   final _startCtrl = TextEditingController();
   final _endCtrl = TextEditingController();
+  final _startLatCtrl = TextEditingController();
+  final _startLngCtrl = TextEditingController();
+  final _endLatCtrl = TextEditingController();
+  final _endLngCtrl = TextEditingController();
   final _operatorCtrl = TextEditingController();
   final _trainNoCtrl = TextEditingController();
   final _classCtrl = TextEditingController();
@@ -24,6 +28,10 @@ class _JourneyEntryPageState extends State<JourneyEntryPage> {
     _dateCtrl.dispose();
     _startCtrl.dispose();
     _endCtrl.dispose();
+    _startLatCtrl.dispose();
+    _startLngCtrl.dispose();
+    _endLatCtrl.dispose();
+    _endLngCtrl.dispose();
     _operatorCtrl.dispose();
     _trainNoCtrl.dispose();
     _classCtrl.dispose();
@@ -44,7 +52,41 @@ class _JourneyEntryPageState extends State<JourneyEntryPage> {
         distanceM: null,
       );
 
-      JourneyDao().insertJourney(journey).then((id) {
+      JourneyDao().insertJourney(journey).then((id) async {
+        int? startId;
+        int? endId;
+        final stationDao = StationDao();
+        try {
+          final sLat = double.tryParse(_startLatCtrl.text);
+          final sLng = double.tryParse(_startLngCtrl.text);
+          if (sLat != null && sLng != null) {
+            startId = await stationDao.insertStation(_startCtrl.text, latitude: sLat, longitude: sLng);
+          } else if (_startCtrl.text.isNotEmpty) {
+            startId = await stationDao.insertStation(_startCtrl.text);
+          }
+
+          final eLat = double.tryParse(_endLatCtrl.text);
+          final eLng = double.tryParse(_endLngCtrl.text);
+          if (eLat != null && eLng != null) {
+            endId = await stationDao.insertStation(_endCtrl.text, latitude: eLat, longitude: eLng);
+          } else if (_endCtrl.text.isNotEmpty) {
+            endId = await stationDao.insertStation(_endCtrl.text);
+          }
+
+          // update journey with station ids
+          final db = await AppDatabase.instance.database;
+          await db.update('journeys', {'start_station_id': startId, 'end_station_id': endId}, where: 'id = ?', whereArgs: [id]);
+
+          // create a simple LINESTRING geometry if coordinates available
+          if (sLat != null && sLng != null && eLat != null && eLng != null) {
+            final wkt = 'LINESTRING(${sLng.toString()} ${sLat.toString()}, ${eLng.toString()} ${eLat.toString()})';
+            final seg = JourneySegment(journeyId: id, geometryWkt: wkt);
+            await JourneySegmentDao().insertSegment(seg);
+          }
+        } catch (e) {
+          // ignore station/segment save errors
+        }
+
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Journey saved')));
         Navigator.pop(context);
       }).catchError((e) {
@@ -73,11 +115,21 @@ class _JourneyEntryPageState extends State<JourneyEntryPage> {
                 decoration: const InputDecoration(labelText: 'Start Station'),
                 validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
               ),
+              Row(children: [
+                Expanded(child: TextFormField(controller: _startLatCtrl, decoration: const InputDecoration(labelText: 'Start Lat'))),
+                const SizedBox(width: 8),
+                Expanded(child: TextFormField(controller: _startLngCtrl, decoration: const InputDecoration(labelText: 'Start Lng'))),
+              ]),
               TextFormField(
                 controller: _endCtrl,
                 decoration: const InputDecoration(labelText: 'End Station'),
                 validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
               ),
+              Row(children: [
+                Expanded(child: TextFormField(controller: _endLatCtrl, decoration: const InputDecoration(labelText: 'End Lat'))),
+                const SizedBox(width: 8),
+                Expanded(child: TextFormField(controller: _endLngCtrl, decoration: const InputDecoration(labelText: 'End Lng'))),
+              ]),
               TextFormField(
                 controller: _operatorCtrl,
                 decoration: const InputDecoration(labelText: 'Operator'),
