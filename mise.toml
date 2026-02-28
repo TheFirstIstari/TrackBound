@@ -1,0 +1,4 @@
+[tools]
+android-sdk = "latest"
+dart = "latest"
+flutter = "latest"
