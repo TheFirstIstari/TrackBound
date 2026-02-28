@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../db/daos/journey_dao.dart';
+import '../models/journey.dart';
 
 class JourneyEntryPage extends StatefulWidget {
   const JourneyEntryPage({super.key});
@@ -31,9 +33,23 @@ class _JourneyEntryPageState extends State<JourneyEntryPage> {
 
   void _submit() {
     if (_formKey.currentState?.validate() ?? false) {
-      // TODO: hook into DB layer
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Journey saved (stub)')));
-      Navigator.pop(context);
+      final journey = Journey(
+        date: _dateCtrl.text,
+        startStationId: null,
+        endStationId: null,
+        serviceId: null,
+        trainNumber: _trainNoCtrl.text.isEmpty ? null : _trainNoCtrl.text,
+        travelClass: _classCtrl.text.isEmpty ? null : _classCtrl.text,
+        notes: _notesCtrl.text.isEmpty ? null : _notesCtrl.text,
+        distanceM: null,
+      );
+
+      JourneyDao().insertJourney(journey).then((id) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Journey saved')));
+        Navigator.pop(context);
+      }).catchError((e) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Save failed: $e')));
+      });
     }
   }
 
