@@ -2,11 +2,11 @@ App Name:
 Trackbound
 
 1. Executive Summary
-App Goal: To provide railway enthusiasts, like Finn, with a dedicated Android application built with Flutter, named Trackbound, to meticulously log, visualize, and share their past and present train journeys. The app aims to be intuitive, visually engaging, and highly functional for tracking specific train routes and their segments.
+App Goal: To provide railway enthusiasts, with a dedicated Android application built with Flutter, named Trackbound, to meticulously log, visualize, and share their past and present train journeys. The app aims to be intuitive, visually engaging, and highly functional for tracking specific train routes and their segments.
 
 Target Audience: Railway enthusiasts, trainspotters, frequent train travelers, and anyone interested in mapping their rail adventures.
 
-2. Core Features (MVP - Minimum Viable Product)
+1. Core Features (MVP - Minimum Viable Product)
 2.1. Journey Logging
 Manual Journey Entry: Users can manually input details for each journey.
 Required Details: Date of Travel, Start Station, End Station.
@@ -46,7 +46,7 @@ Future Enhancement: GIF Export of route progression.
 2.4. Data Management
 Import/Export: JSON, CSV, GPX. Cloud Backup/Restore (Google Drive).
 Privacy: Local data storage first.
-3. Future Enhancements (Post-MVP)
+1. Future Enhancements (Post-MVP)
 Route Drawing Tool: An in-app tool for custom routes.
 GPS Tracking: Live tracking.
 Community Features.
@@ -54,7 +54,7 @@ Advanced Route Discovery.
 Rich Media Integration.
 Powerful Search/Filter.
 Crowdsourced Train Route Data: Potentially, allow users to submit full train routes (as GPX tracks or drawn paths) for common services, or verify existing ones. This would significantly enrich the "Train Database" mentioned above.
-4. Technical Architecture (Flutter Specific)
+1. Technical Architecture (Flutter Specific)
 Framework: Flutter
 Language: Dart
 Architecture Pattern: Clean Architecture (Riverpod/BLoC).
@@ -69,7 +69,7 @@ Display OSM/OpenRailwayMap tiles.
 Render journey lines (polylines).
 Allow interactive selection of route segments by clicking/touching points on a predefined train service polyline.
 Networking: http or Dio for map tiles, potential initial train route data downloads, and cloud backup.
-5. UI/UX Considerations
+1. UI/UX Considerations
 Train/Route Selection Flow: This needs to be very intuitive.
 A clear search bar for train services.
 Visual representation of the selected train's full route on a mini-map when choosing segments.
