@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 import '../db/daos/journey_dao.dart';
+import '../db/daos/station_dao.dart';
+import '../db/daos/journey_segment_dao.dart';
+import '../db/database.dart';
 import '../models/journey.dart';
+import '../models/journey_segment.dart';
 
 class JourneyEntryPage extends StatefulWidget {
   const JourneyEntryPage({super.key});

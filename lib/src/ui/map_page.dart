@@ -26,7 +26,8 @@ class _MapPageState extends State<MapPage> {
     try {
       await FlutterMapTileCaching.initialise();
       final store = FMTC.instance('trackbound');
-      await store.manage.create();
+      // create the store (synchronous on some versions) — do not await a void
+      store.manage.create();
     } catch (_) {
       // ignore caching errors — map will still load from network
     }
