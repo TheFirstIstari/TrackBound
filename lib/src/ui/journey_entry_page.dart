@@ -26,6 +26,20 @@ class _JourneyEntryPageState extends State<JourneyEntryPage> {
   final _trainNoCtrl = TextEditingController();
   final _classCtrl = TextEditingController();
   final _notesCtrl = TextEditingController();
+  int? _selectedRouteId;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_selectedRouteId != null) return;
+    final args = ModalRoute.of(context)?.settings.arguments;
+    if (args is Map) {
+      final routeId = args['routeId'];
+      if (routeId is int) {
+        _selectedRouteId = routeId;
+      }
+    }
+  }
 
   @override
   void dispose() {
@@ -84,7 +98,7 @@ class _JourneyEntryPageState extends State<JourneyEntryPage> {
           // create a simple LINESTRING geometry if coordinates available
           if (sLat != null && sLng != null && eLat != null && eLng != null) {
             final wkt = 'LINESTRING(${sLng.toString()} ${sLat.toString()}, ${eLng.toString()} ${eLat.toString()})';
-            final seg = JourneySegment(journeyId: id, geometryWkt: wkt);
+            final seg = JourneySegment(journeyId: id, routeId: _selectedRouteId, geometryWkt: wkt);
             await JourneySegmentDao().insertSegment(seg);
           }
         } catch (e) {
@@ -129,6 +143,11 @@ class _JourneyEntryPageState extends State<JourneyEntryPage> {
                 decoration: const InputDecoration(labelText: 'End Station'),
                 validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
               ),
+              if (_selectedRouteId != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8.0),
+                  child: Text('Selected Route ID: $_selectedRouteId', style: const TextStyle(fontWeight: FontWeight.w600)),
+                ),
               Row(children: [
                 Expanded(child: TextFormField(controller: _endLatCtrl, decoration: const InputDecoration(labelText: 'End Lat'))),
                 const SizedBox(width: 8),

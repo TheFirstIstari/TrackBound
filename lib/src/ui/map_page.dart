@@ -2,21 +2,39 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:flutter_map_tile_caching/flutter_map_tile_caching.dart';
-import 'dart:ui';
+import '../db/daos/station_dao.dart';
 import '../db/daos/journey_segment_dao.dart';
 import '../db/daos/journey_dao.dart';
 import '../db/daos/route_dao.dart';
 import '../models/train_route.dart';
 
+class _VisitedStation {
+  final int id;
+  final String name;
+  final double latitude;
+  final double longitude;
+  final int visitCount;
+
+  const _VisitedStation({
+    required this.id,
+    required this.name,
+    required this.latitude,
+    required this.longitude,
+    required this.visitCount,
+  });
+}
+
 class _MapData {
-  final List<Polyline> segmentPolylines;
-  final List<Polyline> routePolylines;
+  final List<List<LatLng>> segmentLines;
+  final List<List<LatLng>> routeLines;
+  final List<_VisitedStation> visitedStations;
   final LatLng initialCenter;
   final double initialZoom;
 
   const _MapData({
-    required this.segmentPolylines,
-    required this.routePolylines,
+    required this.segmentLines,
+    required this.routeLines,
+    required this.visitedStations,
     required this.initialCenter,
     required this.initialZoom,
   });
@@ -33,6 +51,7 @@ class MapPage extends StatefulWidget {
 class _MapPageState extends State<MapPage> {
   bool _initialized = false;
   bool _drawMode = false;
+  double _currentZoom = 6.0;
   final List<LatLng> _draftPoints = [];
   late Future<_MapData> _mapDataFuture;
 
@@ -86,11 +105,20 @@ class _MapPageState extends State<MapPage> {
 
           final data = snap.data ??
               _MapData(
-                segmentPolylines: <Polyline>[],
-                routePolylines: <Polyline>[],
+                segmentLines: <List<LatLng>>[],
+                routeLines: <List<LatLng>>[],
+                visitedStations: <_VisitedStation>[],
                 initialCenter: LatLng(51.5074, -0.1278),
                 initialZoom: 6.0,
               );
+
+          if (_currentZoom == 6.0 && data.initialZoom != 6.0) {
+            _currentZoom = data.initialZoom;
+          }
+
+          final segmentPolylines = _buildSegmentPolylines(data.segmentLines, _currentZoom);
+          final routePolylines = _buildRoutePolylines(data.routeLines, _currentZoom);
+          final stationMarkers = _buildStationMarkers(data.visitedStations, _currentZoom);
 
           final draftPolyline = _draftPoints.length > 1
               ? [Polyline(points: _draftPoints, color: Colors.orange, strokeWidth: 3.0)]
@@ -100,6 +128,12 @@ class _MapPageState extends State<MapPage> {
             options: MapOptions(
               center: data.initialCenter,
               zoom: data.initialZoom,
+              onPositionChanged: (position, hasGesture) {
+                final nextZoom = position.zoom ?? _currentZoom;
+                if ((nextZoom - _currentZoom).abs() >= 0.25) {
+                  setState(() => _currentZoom = nextZoom);
+                }
+              },
               onTap: (pos, latlng) {
                 if (_drawMode) {
                   setState(() {
@@ -114,8 +148,9 @@ class _MapPageState extends State<MapPage> {
                 subdomains: const ['a', 'b', 'c'],
                 tileProvider: networkTileProvider,
               ),
-              if (data.segmentPolylines.isNotEmpty) PolylineLayer(polylineCulling: true, polylines: data.segmentPolylines),
-              if (data.routePolylines.isNotEmpty) PolylineLayer(polylineCulling: true, polylines: data.routePolylines),
+              if (stationMarkers.isNotEmpty) MarkerLayer(markers: stationMarkers),
+              if (segmentPolylines.isNotEmpty) PolylineLayer(polylineCulling: true, polylines: segmentPolylines),
+              if (routePolylines.isNotEmpty) PolylineLayer(polylineCulling: true, polylines: routePolylines),
               if (draftPolyline.isNotEmpty) PolylineLayer(polylineCulling: true, polylines: draftPolyline),
             ],
           );
@@ -170,14 +205,14 @@ class _MapPageState extends State<MapPage> {
     final segments = await JourneySegmentDao().getAllSegments();
     final fallbackLines = await JourneyDao().getFallbackJourneyLines();
     final routes = await RouteDao().getAllRoutes();
+    final visitedStationsRows = await StationDao().getVisitedStations();
 
-    final segmentPolylines = <Polyline>[
+    final segmentLines = <List<LatLng>>[
       ...segments
         .map((s) {
-          final pts = _parseWktLineString(s.geometryWkt);
-          return Polyline(points: pts, color: Colors.blue, strokeWidth: 4.0);
+          return _parseWktLineString(s.geometryWkt);
         })
-        .where((p) => p.points.isNotEmpty)
+        .where((points) => points.isNotEmpty)
         .toList(),
     ];
 
@@ -187,16 +222,10 @@ class _MapPageState extends State<MapPage> {
       final eLat = (row['end_lat'] as num?)?.toDouble();
       final eLng = (row['end_lng'] as num?)?.toDouble();
       if (sLat == null || sLng == null || eLat == null || eLng == null) continue;
-      segmentPolylines.add(
-        Polyline(
-          points: [LatLng(sLat, sLng), LatLng(eLat, eLng)],
-          color: const Color.fromARGB(180, 33, 150, 243),
-          strokeWidth: 4.0,
-        ),
-      );
+      segmentLines.add([LatLng(sLat, sLng), LatLng(eLat, eLng)]);
     }
 
-    final routePolylines = <Polyline>[];
+    final routeLines = <List<LatLng>>[];
     List<LatLng> selectedPoints = const <LatLng>[];
 
     for (final rt in routes) {
@@ -206,13 +235,22 @@ class _MapPageState extends State<MapPage> {
       if (isSelected) {
         selectedPoints = pts;
       }
-      routePolylines.add(
-        Polyline(
-          points: pts,
-          color: isSelected ? Colors.deepOrange : Colors.red,
-          strokeWidth: isSelected ? 5.0 : 3.0,
-        ),
+      routeLines.add(pts);
+    }
+
+    final visitedStations = visitedStationsRows.map((row) {
+      return _VisitedStation(
+        id: row['id'] as int,
+        name: (row['name'] as String?) ?? 'Station',
+        latitude: (row['latitude'] as num).toDouble(),
+        longitude: (row['longitude'] as num).toDouble(),
+        visitCount: (row['visit_count'] as num?)?.toInt() ?? 1,
       );
+    }).toList();
+
+    if (visitedStations.isNotEmpty && selectedPoints.isEmpty) {
+      final first = visitedStations.first;
+      selectedPoints = [LatLng(first.latitude, first.longitude)];
     }
 
     LatLng initialCenter = LatLng(51.5074, -0.1278);
@@ -221,17 +259,124 @@ class _MapPageState extends State<MapPage> {
     if (selectedPoints.isNotEmpty) {
       initialCenter = _centroid(selectedPoints);
       initialZoom = 10.0;
-    } else if (segmentPolylines.isNotEmpty && segmentPolylines.first.points.isNotEmpty) {
-      initialCenter = segmentPolylines.first.points.first;
+    } else if (segmentLines.isNotEmpty && segmentLines.first.isNotEmpty) {
+      initialCenter = segmentLines.first.first;
       initialZoom = 8.0;
     }
 
     return _MapData(
-      segmentPolylines: segmentPolylines,
-      routePolylines: routePolylines,
+      segmentLines: segmentLines,
+      routeLines: routeLines,
+      visitedStations: visitedStations,
       initialCenter: initialCenter,
       initialZoom: initialZoom,
     );
+  }
+
+  List<Polyline> _buildSegmentPolylines(List<List<LatLng>> lines, double zoom) {
+    return lines
+        .map((line) => _simplifyLineForZoom(line, zoom))
+        .where((line) => line.length >= 2)
+        .map(
+          (line) => Polyline(
+            points: line,
+            color: const Color.fromARGB(210, 33, 150, 243),
+            strokeWidth: zoom <= 6 ? 2.5 : 4.0,
+          ),
+        )
+        .toList();
+  }
+
+  List<Polyline> _buildRoutePolylines(List<List<LatLng>> lines, double zoom) {
+    if (zoom < 7.0) {
+      return const <Polyline>[];
+    }
+    return lines
+        .map((line) => _simplifyLineForZoom(line, zoom))
+        .where((line) => line.length >= 2)
+        .map(
+          (line) => Polyline(
+            points: line,
+            color: Colors.red,
+            strokeWidth: zoom < 10 ? 2.0 : 3.0,
+          ),
+        )
+        .toList();
+  }
+
+  List<Marker> _buildStationMarkers(List<_VisitedStation> stations, double zoom) {
+    if (stations.isEmpty) return const <Marker>[];
+
+    if (zoom < 7.0) {
+      final cellSize = zoom < 5.0 ? 2.0 : 1.0;
+      final clusters = <String, List<_VisitedStation>>{};
+
+      for (final s in stations) {
+        final keyLat = (s.latitude / cellSize).floor();
+        final keyLng = (s.longitude / cellSize).floor();
+        final key = '$keyLat:$keyLng';
+        clusters.putIfAbsent(key, () => <_VisitedStation>[]).add(s);
+      }
+
+      return clusters.values.map((cluster) {
+        final totalVisits = cluster.fold<int>(0, (sum, s) => sum + s.visitCount);
+        final avgLat = cluster.map((s) => s.latitude).reduce((a, b) => a + b) / cluster.length;
+        final avgLng = cluster.map((s) => s.longitude).reduce((a, b) => a + b) / cluster.length;
+        return Marker(
+          point: LatLng(avgLat, avgLng),
+          width: 42,
+          height: 42,
+          builder: (_) => Container(
+            decoration: BoxDecoration(
+              color: Colors.indigo.withValues(alpha: 0.8),
+              shape: BoxShape.circle,
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              '$totalVisits',
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+            ),
+          ),
+        );
+      }).toList();
+    }
+
+    return stations.map((s) {
+      return Marker(
+        point: LatLng(s.latitude, s.longitude),
+        width: 24,
+        height: 24,
+        builder: (_) => Tooltip(
+          message: '${s.name} (${s.visitCount})',
+          child: const Icon(Icons.location_pin, color: Colors.indigo, size: 22),
+        ),
+      );
+    }).toList();
+  }
+
+  List<LatLng> _simplifyLineForZoom(List<LatLng> points, double zoom) {
+    if (points.length <= 2) return points;
+    int stride;
+    if (zoom <= 5.0) {
+      stride = 8;
+    } else if (zoom <= 7.0) {
+      stride = 4;
+    } else if (zoom <= 9.0) {
+      stride = 2;
+    } else {
+      stride = 1;
+    }
+
+    if (stride == 1) return points;
+
+    final simplified = <LatLng>[];
+    for (var i = 0; i < points.length; i += stride) {
+      simplified.add(points[i]);
+    }
+    if (simplified.last != points.last) {
+      simplified.add(points.last);
+    }
+    return simplified;
   }
 
   LatLng _centroid(List<LatLng> points) {

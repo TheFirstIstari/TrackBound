@@ -50,4 +50,33 @@ class StationDao {
     if (rows.isEmpty) return null;
     return rows.first;
   }
+
+  Future<List<Map<String, Object?>>> getVisitedStations() async {
+    final db = await _db;
+    final rows = await db.rawQuery('''
+      WITH visited AS (
+        SELECT start_station_id AS station_id, date AS visited_date
+        FROM journeys
+        WHERE start_station_id IS NOT NULL
+        UNION ALL
+        SELECT end_station_id AS station_id, date AS visited_date
+        FROM journeys
+        WHERE end_station_id IS NOT NULL
+      )
+      SELECT
+        s.id,
+        s.name,
+        s.code,
+        s.latitude,
+        s.longitude,
+        COUNT(v.station_id) AS visit_count,
+        MAX(v.visited_date) AS last_visited_date
+      FROM visited v
+      JOIN stations s ON s.id = v.station_id
+      WHERE s.latitude IS NOT NULL AND s.longitude IS NOT NULL
+      GROUP BY s.id, s.name, s.code, s.latitude, s.longitude
+      ORDER BY visit_count DESC, s.name ASC
+    ''');
+    return rows;
+  }
 }
