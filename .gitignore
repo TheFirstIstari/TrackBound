@@ -14,3 +14,4 @@ ios/Flutter/.last_build_id
 *.ipr
 *.iws
 .DS_Store
+assets/rail/rail_edges_seed.json
