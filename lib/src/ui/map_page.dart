@@ -10,7 +10,6 @@ import '../db/daos/journey_dao.dart';
 import '../db/daos/route_dao.dart';
 import '../db/daos/rail_edge_dao.dart';
 import '../models/rail_edge.dart';
-import '../models/train_route.dart';
 import '../utils/rail_network_seed.dart';
 
 class _VisitedStation {
@@ -61,14 +60,11 @@ class _MapPageState extends State<MapPage> {
   static const _prefZoom = 'map.zoom';
 
   bool _initialized = false;
-  bool _drawMode = false;
-  bool _snapToRoutes = true;
   bool _showRailNetwork = true;
   bool _markTravelMode = false;
   double _currentZoom = 6.0;
   LatLng? _persistedCenter;
   double? _persistedZoom;
-  final List<LatLng> _draftPoints = [];
   late Future<_MapData> _mapDataFuture;
 
   @override
@@ -157,22 +153,12 @@ class _MapPageState extends State<MapPage> {
         title: const Text('Map'),
         actions: [
           IconButton(
-            onPressed: () => setState(() => _snapToRoutes = !_snapToRoutes),
-            icon: Icon(_snapToRoutes ? Icons.alt_route : Icons.gesture),
-            tooltip: _snapToRoutes ? 'Snap drawing to routes: on' : 'Snap drawing to routes: off',
-          ),
-          IconButton(
             onPressed: () => setState(() => _showRailNetwork = !_showRailNetwork),
             icon: Icon(_showRailNetwork ? Icons.railway_alert : Icons.railway_alert_outlined),
             tooltip: _showRailNetwork ? 'Rail network overlay: on' : 'Rail network overlay: off',
           ),
           IconButton(
-            onPressed: () => setState(() {
-              _markTravelMode = !_markTravelMode;
-              if (_markTravelMode) {
-                _drawMode = false;
-              }
-            }),
+            onPressed: () => setState(() => _markTravelMode = !_markTravelMode),
             icon: Icon(_markTravelMode ? Icons.playlist_add_check_circle : Icons.playlist_add_check),
             tooltip: _markTravelMode ? 'Mark travelled mode: on' : 'Mark travelled mode: off',
           ),
@@ -214,10 +200,6 @@ class _MapPageState extends State<MapPage> {
           final railPolylines = _showRailNetwork ? _buildRailEdgePolylines(railEdges, _currentZoom) : const <Polyline>[];
           final stationMarkers = _buildStationMarkers(data.visitedStations, _currentZoom);
 
-          final draftPolyline = _draftPoints.length > 1
-              ? [Polyline(points: _draftPoints, color: Colors.orange, strokeWidth: 3.0)]
-              : <Polyline>[];
-
           return FlutterMap(
             options: MapOptions(
               center: data.initialCenter,
@@ -235,20 +217,6 @@ class _MapPageState extends State<MapPage> {
               onTap: (pos, latlng) {
                 if (_markTravelMode) {
                   _toggleNearestRailEdge(latlng, railEdges);
-                  return;
-                }
-                if (_drawMode) {
-                  final snapLines = railEdges.isNotEmpty
-                      ? railEdges
-                          .map((e) => <LatLng>[LatLng(e.startLat, e.startLng), LatLng(e.endLat, e.endLng)])
-                          .toList()
-                      : data.routeLines;
-                  final nextPoint = _snapToRoutes
-                      ? _snapPointToRoute(latlng, snapLines, maxDistanceMeters: 1500) ?? latlng
-                      : latlng;
-                  setState(() {
-                    _draftPoints.add(nextPoint);
-                  });
                 }
               },
             ),
@@ -262,60 +230,11 @@ class _MapPageState extends State<MapPage> {
               if (railPolylines.isNotEmpty) PolylineLayer(polylineCulling: true, polylines: railPolylines),
               if (segmentPolylines.isNotEmpty) PolylineLayer(polylineCulling: true, polylines: segmentPolylines),
               if (routePolylines.isNotEmpty) PolylineLayer(polylineCulling: true, polylines: routePolylines),
-              if (draftPolyline.isNotEmpty) PolylineLayer(polylineCulling: true, polylines: draftPolyline),
             ],
           );
         },
       ),
-      floatingActionButton: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          FloatingActionButton(
-            heroTag: 'draw',
-            onPressed: () => setState(() {
-              _drawMode = !_drawMode;
-              if (_drawMode) {
-                _markTravelMode = false;
-              }
-            }),
-            child: Icon(_drawMode ? Icons.edit_off : Icons.draw),
-            tooltip: _drawMode ? 'Exit draw mode' : 'Enter draw mode',
-          ),
-          const SizedBox(height: 8),
-          FloatingActionButton(
-            heroTag: 'save',
-            onPressed: _draftPoints.isNotEmpty ? _saveDraftAsRoute : null,
-            child: const Icon(Icons.save),
-            tooltip: 'Save drawn route',
-          ),
-        ],
-      ),
     );
-  }
-
-  Future<void> _saveDraftAsRoute() async {
-    if (_draftPoints.length < 2) return;
-    final nameController = TextEditingController();
-    final name = await showDialog<String?>(context: context, builder: (ctx) {
-      return AlertDialog(
-        title: const Text('Save Route'),
-        content: TextField(controller: nameController, decoration: const InputDecoration(labelText: 'Route name')),
-        actions: [TextButton(onPressed: () => Navigator.pop(ctx, null), child: const Text('Cancel')), TextButton(onPressed: () => Navigator.pop(ctx, nameController.text), child: const Text('Save'))],
-      );
-    });
-    nameController.dispose();
-    if (name == null || name.isEmpty) return;
-
-    final coords = _draftPoints.map((p) => '${p.longitude} ${p.latitude}').join(', ');
-    final wkt = 'LINESTRING($coords)';
-    final rt = TrainRoute(serviceId: 0, name: name, geometryWkt: wkt);
-    final routeId = await RouteDao().insertRoute(rt);
-    await RailEdgeDao().upsertEdgesFromLine(_draftPoints, sourceRouteId: routeId);
-    setState(() {
-      _draftPoints.clear();
-      _drawMode = false;
-      _mapDataFuture = _loadMapDataWithSeed();
-    });
   }
 
   void _showControlsHelp() {
@@ -328,15 +247,11 @@ class _MapPageState extends State<MapPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('• Draw button: add points to a new route polyline.'),
-              SizedBox(height: 6),
-              Text('• Save button: saves drawn line as a route and rail edges.'),
-              SizedBox(height: 6),
-              Text('• Route-snap toggle: snaps taps to nearest rail/route geometry.'),
-              SizedBox(height: 6),
               Text('• Rail overlay toggle: shows rail network segments.'),
               SizedBox(height: 6),
               Text('• Mark travelled toggle: tap near a rail edge to mark/unmark travelled.'),
+              SizedBox(height: 6),
+              Text('• Drawing on the map is deprecated in this version.'),
               SizedBox(height: 6),
               Text('• Refresh: reloads DB-backed map layers.'),
             ],
@@ -632,28 +547,6 @@ class _MapPageState extends State<MapPage> {
     final end = b.clamp(0, points.length - 1);
     if (end - start < 1) return points;
     return points.sublist(start, end + 1);
-  }
-
-  LatLng? _snapPointToRoute(LatLng point, List<List<LatLng>> routes, {required double maxDistanceMeters}) {
-    LatLng? bestPoint;
-    var bestDistance = double.infinity;
-
-    for (final route in routes) {
-      if (route.length < 2) continue;
-      for (var i = 0; i < route.length - 1; i++) {
-        final candidate = _nearestPointOnSegment(point, route[i], route[i + 1]);
-        final distance = _distanceMeters(point, candidate);
-        if (distance < bestDistance) {
-          bestDistance = distance;
-          bestPoint = candidate;
-        }
-      }
-    }
-
-    if (bestPoint == null || bestDistance > maxDistanceMeters) {
-      return null;
-    }
-    return bestPoint;
   }
 
   LatLng _nearestPointOnSegment(LatLng p, LatLng a, LatLng b) {
