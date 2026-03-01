@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'src/ui/home_page.dart';
 import 'src/ui/map_page.dart';
 import 'src/ui/journey_entry_page.dart';
+import 'src/ui/routes_page.dart';
 
 void main() {
   runApp(const ProviderScope(child: TrackBoundApp()));
@@ -21,6 +22,7 @@ class TrackBoundApp extends StatelessWidget {
         '/': (context) => const HomePage(),
         '/map': (context) => const MapPage(),
         '/entry': (context) => const JourneyEntryPage(),
+        '/routes': (context) => const RoutesPage(),
       },
     );
   }

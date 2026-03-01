@@ -10,6 +10,17 @@ class RouteDao {
     return await db.insert('routes', r.toMap());
   }
 
+  Future<int> updateRoute(TrainRoute r) async {
+    final db = await _db;
+    if (r.id == null) throw ArgumentError('Route id required for update');
+    return await db.update('routes', r.toMap(), where: 'id = ?', whereArgs: [r.id]);
+  }
+
+  Future<int> deleteRoute(int id) async {
+    final db = await _db;
+    return await db.delete('routes', where: 'id = ?', whereArgs: [id]);
+  }
+
   Future<List<TrainRoute>> getAllRoutes() async {
     final db = await _db;
     final rows = await db.query('routes', orderBy: 'id DESC');
