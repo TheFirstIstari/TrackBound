@@ -3,6 +3,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:flutter_map_tile_caching/flutter_map_tile_caching.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:collection/collection.dart';
 import 'dart:math';
 import '../db/daos/station_dao.dart';
 import '../db/daos/journey_segment_dao.dart';
@@ -46,6 +47,27 @@ class _MapData {
   });
 }
 
+class _RailGraph {
+  final Map<String, LatLng> nodeCoords;
+  final Map<String, List<String>> adjacency;
+  final Map<String, List<String>> grid;
+  final double cellSizeDeg;
+
+  const _RailGraph({
+    required this.nodeCoords,
+    required this.adjacency,
+    required this.grid,
+    required this.cellSizeDeg,
+  });
+}
+
+class _QueueNode {
+  final String key;
+  final double priority;
+
+  const _QueueNode(this.key, this.priority);
+}
+
 class MapPage extends StatefulWidget {
   final int? routeId;
   const MapPage({super.key, this.routeId});
@@ -67,6 +89,8 @@ class _MapPageState extends State<MapPage> {
   LatLng? _lastCullCenter;
   LatLng? _persistedCenter;
   double? _persistedZoom;
+  _MapData? _currentMapData;
+  final Map<String, List<LatLng>> _pathCache = <String, List<LatLng>>{};
   late Future<_MapData> _mapDataFuture;
 
   @override
@@ -191,6 +215,7 @@ class _MapPageState extends State<MapPage> {
                 initialCenter: LatLng(51.5074, -0.1278),
                 initialZoom: 6.0,
               );
+          _currentMapData = data;
 
           if (_currentZoom == 6.0 && data.initialZoom != 6.0) {
             _currentZoom = data.initialZoom;
@@ -308,17 +333,24 @@ class _MapPageState extends State<MapPage> {
       final pts = _parseWktLineString(rt.geometryWkt);
       if (pts.isNotEmpty) {
         routeById[rt.id!] = pts;
-        await railEdgeDao.upsertEdgesFromLine(pts, sourceRouteId: rt.id);
       }
     }
 
     final railEdges = await railEdgeDao.getAllEdges();
+    final railGraph = _buildRailGraph(railEdges);
+    _pathCache.clear();
 
     final segmentLines = <List<LatLng>>[
       ...segments
         .map((s) {
           final explicit = _parseWktLineString(s.geometryWkt);
           if (explicit.isNotEmpty) {
+            if (explicit.length == 2) {
+              final graphPath = _findPathOnRailGraph(explicit.first, explicit.last, railGraph);
+              if (graphPath.length >= 2) {
+                return graphPath;
+              }
+            }
             return explicit;
           }
 
@@ -345,7 +377,14 @@ class _MapPageState extends State<MapPage> {
       final eLat = (row['end_lat'] as num?)?.toDouble();
       final eLng = (row['end_lng'] as num?)?.toDouble();
       if (sLat == null || sLng == null || eLat == null || eLng == null) continue;
-      segmentLines.add([LatLng(sLat, sLng), LatLng(eLat, eLng)]);
+      final start = LatLng(sLat, sLng);
+      final end = LatLng(eLat, eLng);
+      final graphPath = _findPathOnRailGraph(start, end, railGraph);
+      if (graphPath.length >= 2) {
+        segmentLines.add(graphPath);
+      } else {
+        segmentLines.add([start, end]);
+      }
     }
 
     final routeLines = <List<LatLng>>[];
@@ -457,13 +496,64 @@ class _MapPageState extends State<MapPage> {
 
     if (edge.sourceRouteId != null) {
       await RailEdgeDao().toggleTravelledBySourceRouteId(edge.sourceRouteId!);
+      _applyLocalRailToggle(sourceRouteId: edge.sourceRouteId);
     } else {
       await RailEdgeDao().toggleTravelled(edge.id!);
+      _applyLocalRailToggle(edgeId: edge.id);
     }
     if (!mounted) return;
     setState(() {
-      _mapDataFuture = _loadMapDataWithSeed();
+      if (_currentMapData != null) {
+        _mapDataFuture = Future<_MapData>.value(_currentMapData!);
+      } else {
+        _mapDataFuture = _loadMapDataWithSeed();
+      }
     });
+  }
+
+  void _applyLocalRailToggle({int? edgeId, int? sourceRouteId}) {
+    final current = _currentMapData;
+    if (current == null) return;
+    final railEdges = current.railEdges;
+    if (railEdges == null || railEdges.isEmpty) return;
+
+    bool? nextTravelled;
+    for (final edge in railEdges) {
+      final matchesGroup = sourceRouteId != null && edge.sourceRouteId == sourceRouteId;
+      final matchesEdge = sourceRouteId == null && edgeId != null && edge.id == edgeId;
+      if (matchesGroup || matchesEdge) {
+        nextTravelled = !edge.travelled;
+        break;
+      }
+    }
+    if (nextTravelled == null) return;
+
+    final updated = railEdges.map((edge) {
+      final matchesGroup = sourceRouteId != null && edge.sourceRouteId == sourceRouteId;
+      final matchesEdge = sourceRouteId == null && edgeId != null && edge.id == edgeId;
+      if (!(matchesGroup || matchesEdge)) {
+        return edge;
+      }
+      return RailEdge(
+        id: edge.id,
+        edgeKey: edge.edgeKey,
+        startLat: edge.startLat,
+        startLng: edge.startLng,
+        endLat: edge.endLat,
+        endLng: edge.endLng,
+        sourceRouteId: edge.sourceRouteId,
+        travelled: nextTravelled!,
+      );
+    }).toList(growable: false);
+
+    _currentMapData = _MapData(
+      segmentLines: current.segmentLines,
+      routeLines: current.routeLines,
+      railEdges: updated,
+      visitedStations: current.visitedStations,
+      initialCenter: current.initialCenter,
+      initialZoom: current.initialZoom,
+    );
   }
 
   RailEdge? _findNearestEdge(LatLng point, List<RailEdge> edges, {required double maxDistanceMeters}) {
@@ -499,6 +589,172 @@ class _MapPageState extends State<MapPage> {
       return null;
     }
     return best;
+  }
+
+  _RailGraph _buildRailGraph(List<RailEdge> edges) {
+    const cellSize = 0.02;
+    final nodeCoords = <String, LatLng>{};
+    final adjacency = <String, List<String>>{};
+    final grid = <String, List<String>>{};
+
+    void addNode(LatLng p) {
+      final key = '${p.latitude.toStringAsFixed(6)},${p.longitude.toStringAsFixed(6)}';
+      if (nodeCoords.containsKey(key)) return;
+      nodeCoords[key] = p;
+      final cellKey = _gridCell(p.latitude, p.longitude, cellSize);
+      grid.putIfAbsent(cellKey, () => <String>[]).add(key);
+    }
+
+    void addEdge(String a, String b) {
+      adjacency.putIfAbsent(a, () => <String>[]);
+      if (!adjacency[a]!.contains(b)) {
+        adjacency[a]!.add(b);
+      }
+    }
+
+    for (final edge in edges) {
+      final a = LatLng(edge.startLat, edge.startLng);
+      final b = LatLng(edge.endLat, edge.endLng);
+      addNode(a);
+      addNode(b);
+      final aKey = '${a.latitude.toStringAsFixed(6)},${a.longitude.toStringAsFixed(6)}';
+      final bKey = '${b.latitude.toStringAsFixed(6)},${b.longitude.toStringAsFixed(6)}';
+      addEdge(aKey, bKey);
+      addEdge(bKey, aKey);
+    }
+
+    return _RailGraph(
+      nodeCoords: nodeCoords,
+      adjacency: adjacency,
+      grid: grid,
+      cellSizeDeg: cellSize,
+    );
+  }
+
+  String _gridCell(double lat, double lng, double cellSize) {
+    final latCell = (lat / cellSize).floor();
+    final lngCell = (lng / cellSize).floor();
+    return '$latCell:$lngCell';
+  }
+
+  String? _findNearestRailNode(LatLng point, _RailGraph graph, {double maxDistanceMeters = 3000}) {
+    if (graph.nodeCoords.isEmpty) return null;
+
+    final latCell = (point.latitude / graph.cellSizeDeg).floor();
+    final lngCell = (point.longitude / graph.cellSizeDeg).floor();
+
+    String? bestKey;
+    var bestDistance = double.infinity;
+
+    for (var radius = 0; radius <= 6; radius++) {
+      var foundInRadius = false;
+      for (var dLat = -radius; dLat <= radius; dLat++) {
+        for (var dLng = -radius; dLng <= radius; dLng++) {
+          final key = '${latCell + dLat}:${lngCell + dLng}';
+          final nodes = graph.grid[key];
+          if (nodes == null || nodes.isEmpty) continue;
+          foundInRadius = true;
+
+          for (final nodeKey in nodes) {
+            final nodePoint = graph.nodeCoords[nodeKey];
+            if (nodePoint == null) continue;
+            final d = _distanceMeters(point, nodePoint);
+            if (d < bestDistance) {
+              bestDistance = d;
+              bestKey = nodeKey;
+            }
+          }
+        }
+      }
+      if (bestKey != null && foundInRadius) {
+        break;
+      }
+    }
+
+    if (bestKey == null || bestDistance > maxDistanceMeters) {
+      return null;
+    }
+    return bestKey;
+  }
+
+  List<LatLng> _findPathOnRailGraph(LatLng start, LatLng end, _RailGraph graph) {
+    final startKey = _findNearestRailNode(start, graph);
+    final endKey = _findNearestRailNode(end, graph);
+    if (startKey == null || endKey == null) return const <LatLng>[];
+    if (startKey == endKey) {
+      final p = graph.nodeCoords[startKey];
+      return p == null ? const <LatLng>[] : <LatLng>[p];
+    }
+
+    final cacheKey = '$startKey>$endKey';
+    final cached = _pathCache[cacheKey];
+    if (cached != null) {
+      return cached;
+    }
+
+    final open = PriorityQueue<_QueueNode>((a, b) => a.priority.compareTo(b.priority));
+    final cameFrom = <String, String>{};
+    final gScore = <String, double>{startKey: 0.0};
+    final fScore = <String, double>{
+      startKey: _distanceMeters(graph.nodeCoords[startKey]!, graph.nodeCoords[endKey]!),
+    };
+    final closed = <String>{};
+
+    open.add(_QueueNode(startKey, fScore[startKey]!));
+
+    while (open.isNotEmpty) {
+      final current = open.removeFirst().key;
+      if (current == endKey) {
+        final path = _reconstructPath(cameFrom, current, graph);
+        if (_pathCache.length > 10000) {
+          _pathCache.clear();
+        }
+        _pathCache[cacheKey] = path;
+        return path;
+      }
+      if (!closed.add(current)) {
+        continue;
+      }
+
+      final neighbors = graph.adjacency[current] ?? const <String>[];
+      for (final neighbor in neighbors) {
+        if (closed.contains(neighbor)) continue;
+        final currentPoint = graph.nodeCoords[current];
+        final neighborPoint = graph.nodeCoords[neighbor];
+        if (currentPoint == null || neighborPoint == null) continue;
+
+        final tentative = (gScore[current] ?? double.infinity) + _distanceMeters(currentPoint, neighborPoint);
+        if (tentative < (gScore[neighbor] ?? double.infinity)) {
+          cameFrom[neighbor] = current;
+          gScore[neighbor] = tentative;
+          final heuristic = _distanceMeters(neighborPoint, graph.nodeCoords[endKey]!);
+          final score = tentative + heuristic;
+          fScore[neighbor] = score;
+          open.add(_QueueNode(neighbor, score));
+        }
+      }
+    }
+
+    return const <LatLng>[];
+  }
+
+  List<LatLng> _reconstructPath(Map<String, String> cameFrom, String current, _RailGraph graph) {
+    final path = <LatLng>[];
+    var cursor = current;
+    final currentPoint = graph.nodeCoords[cursor];
+    if (currentPoint != null) {
+      path.add(currentPoint);
+    }
+
+    while (cameFrom.containsKey(cursor)) {
+      cursor = cameFrom[cursor]!;
+      final p = graph.nodeCoords[cursor];
+      if (p != null) {
+        path.add(p);
+      }
+    }
+
+    return path.reversed.toList(growable: false);
   }
 
   List<Polyline> _buildSegmentPolylines(List<List<LatLng>> lines, double zoom) {

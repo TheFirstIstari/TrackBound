@@ -26,6 +26,29 @@ python tools/rail_model_builder/build_rail_model.py \
   --output assets/rail/rail_edges_seed.json
 ```
 
+For large regions, use tiled fetch (recommended):
+
+```bash
+python tools/rail_model_builder/build_rail_model.py \
+  --bbox 49.8,-8.6,60.9,1.8 \
+  --tile-lat-deg 1.0 \
+  --tile-lng-deg 1.0 \
+  --tile-pause-s 0.4 \
+  --tile-retries 2 \
+  --progress-every 5000 \
+  --output assets/rail/rail_edges_seed.json
+```
+
+To disable tiling (single request):
+
+```bash
+python tools/rail_model_builder/build_rail_model.py \
+  --bbox 49.8,-8.6,60.9,1.8 \
+  --tile-lat-deg 0 \
+  --tile-lng-deg 0 \
+  --output assets/rail/rail_edges_seed.json
+```
+
 Enable more frequent telemetry during long runs:
 
 ```bash

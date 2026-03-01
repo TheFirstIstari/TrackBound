@@ -170,13 +170,9 @@ class _JourneyEntryPageState extends State<JourneyEntryPage> {
           final db = await AppDatabase.instance.database;
           await db.update('journeys', {'start_station_id': startId, 'end_station_id': endId}, where: 'id = ?', whereArgs: [id]);
 
-          // create a simple LINESTRING geometry if coordinates available
-          if (sLat != null && sLng != null && eLat != null && eLng != null) {
-            final wkt = 'LINESTRING(${sLng.toString()} ${sLat.toString()}, ${eLng.toString()} ${eLat.toString()})';
-            final seg = JourneySegment(journeyId: id, routeId: _selectedRouteId, geometryWkt: wkt);
-            await JourneySegmentDao().insertSegment(seg);
-          } else if (_selectedRouteId != null) {
-            // still persist a route-linked segment so map can render travelled sections from route geometry
+          // For route-selected journeys, store route linkage without straight-line geometry.
+          // For non-route journeys, map rendering can infer rail path from station coordinates.
+          if (_selectedRouteId != null) {
             final seg = JourneySegment(journeyId: id, routeId: _selectedRouteId);
             await JourneySegmentDao().insertSegment(seg);
           }

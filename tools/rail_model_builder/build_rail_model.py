@@ -127,6 +127,75 @@ out geom;
     return lines, stations
 
 
+def split_bbox(
+    bbox: Tuple[float, float, float, float], tile_lat_deg: float, tile_lng_deg: float
+) -> List[Tuple[float, float, float, float]]:
+    south, west, north, east = bbox
+    if tile_lat_deg <= 0 or tile_lng_deg <= 0:
+        return [bbox]
+
+    tiles: List[Tuple[float, float, float, float]] = []
+    lat = south
+    while lat < north:
+        next_lat = min(lat + tile_lat_deg, north)
+        lng = west
+        while lng < east:
+            next_lng = min(lng + tile_lng_deg, east)
+            tiles.append((lat, lng, next_lat, next_lng))
+            lng = next_lng
+        lat = next_lat
+
+    return tiles
+
+
+def fetch_osm_rail_lines_and_stations_chunked(
+    bbox: Tuple[float, float, float, float],
+    telemetry: Telemetry,
+    tile_lat_deg: float,
+    tile_lng_deg: float,
+    tile_pause_s: float,
+    tile_retries: int,
+    timeout: int = 120,
+) -> Tuple[List[List[Coord]], List[Coord]]:
+    tiles = split_bbox(bbox, tile_lat_deg, tile_lng_deg)
+    telemetry.log(f"Tile mode: {len(tiles)} tile(s)")
+
+    all_lines: List[List[Coord]] = []
+    all_stations: List[Coord] = []
+
+    for i, tile in enumerate(tiles, start=1):
+        attempt = 0
+        while True:
+            try:
+                telemetry.log(f"Tile {i}/{len(tiles)} fetch start (attempt {attempt+1}): {tile}")
+                lines, stations = fetch_osm_rail_lines_and_stations(tile, telemetry=telemetry, timeout=timeout)
+                all_lines.extend(lines)
+                all_stations.extend(stations)
+                telemetry.log(
+                    f"Tile {i}/{len(tiles)} complete: +{len(lines)} lines, +{len(stations)} stations "
+                    f"(aggregate lines={len(all_lines)}, stations={len(all_stations)})"
+                )
+                break
+            except requests.RequestException as exc:
+                attempt += 1
+                if attempt > tile_retries:
+                    raise
+                wait_s = max(tile_pause_s, 0.0) * attempt
+                telemetry.log(
+                    f"Tile {i}/{len(tiles)} failed ({exc.__class__.__name__}: {exc}). "
+                    f"Retrying in {wait_s:.1f}s ({attempt}/{tile_retries})"
+                )
+                time.sleep(wait_s)
+
+        if i < len(tiles) and tile_pause_s > 0:
+            time.sleep(tile_pause_s)
+
+    telemetry.log(
+        f"Chunked fetch complete: lines={len(all_lines)}, stations={len(all_stations)}, tiles={len(tiles)}"
+    )
+    return all_lines, all_stations
+
+
 def parse_geojson_lines(path: Path) -> List[List[Coord]]:
     data = json.loads(path.read_text(encoding="utf-8"))
     features = data.get("features", []) if isinstance(data, dict) else []
@@ -397,9 +466,22 @@ def build_seed(
     opentraintimes_csv: Optional[Path],
     station_snap_m: float,
     telemetry: Telemetry,
+    tile_lat_deg: float,
+    tile_lng_deg: float,
+    tile_pause_s: float,
+    tile_retries: int,
+    overpass_timeout: int,
 ) -> List[Dict]:
     telemetry.log("Build started")
-    osm_lines, stations = fetch_osm_rail_lines_and_stations(bbox, telemetry=telemetry)
+    osm_lines, stations = fetch_osm_rail_lines_and_stations_chunked(
+        bbox,
+        telemetry=telemetry,
+        tile_lat_deg=tile_lat_deg,
+        tile_lng_deg=tile_lng_deg,
+        tile_pause_s=tile_pause_s,
+        tile_retries=tile_retries,
+        timeout=overpass_timeout,
+    )
     all_lines = list(osm_lines)
 
     for path in extra_geojson:
@@ -442,6 +524,36 @@ def main() -> None:
         help="max meters to snap station points onto nearest graph node for segmentation",
     )
     parser.add_argument(
+        "--tile-lat-deg",
+        type=float,
+        default=1.0,
+        help="tile height in degrees for chunked Overpass fetch (<=0 disables tiling)",
+    )
+    parser.add_argument(
+        "--tile-lng-deg",
+        type=float,
+        default=1.0,
+        help="tile width in degrees for chunked Overpass fetch (<=0 disables tiling)",
+    )
+    parser.add_argument(
+        "--tile-pause-s",
+        type=float,
+        default=0.4,
+        help="delay between tile fetches to reduce API pressure",
+    )
+    parser.add_argument(
+        "--tile-retries",
+        type=int,
+        default=2,
+        help="retries per tile fetch on transient Overpass failures",
+    )
+    parser.add_argument(
+        "--overpass-timeout",
+        type=int,
+        default=120,
+        help="HTTP timeout (seconds) for each Overpass tile request",
+    )
+    parser.add_argument(
         "--progress-every",
         type=int,
         default=20000,
@@ -467,6 +579,11 @@ def main() -> None:
         opentraintimes_csv=opentraintimes_csv,
         station_snap_m=args.station_snap_m,
         telemetry=telemetry,
+        tile_lat_deg=args.tile_lat_deg,
+        tile_lng_deg=args.tile_lng_deg,
+        tile_pause_s=args.tile_pause_s,
+        tile_retries=args.tile_retries,
+        overpass_timeout=args.overpass_timeout,
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
