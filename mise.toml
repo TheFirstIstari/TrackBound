@@ -2,3 +2,4 @@
 android-sdk = "latest"
 dart = "latest"
 flutter = "latest"
+python = "3.12"

@@ -31,6 +31,7 @@ PR checklist
 - [ ] Tests added/updated
 - [ ] Code formatted (`flutter format`)
 - [ ] Lint issues addressed (`flutter analyze`)
+- [ ] Documentation updated for any UX/behavior/config changes (`README.md`, `CHANGELOG.md`, relevant docs)
 - [ ] PR description explains the why and what
 
 Communications

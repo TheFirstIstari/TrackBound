@@ -14,9 +14,27 @@ class RailEdgeDao {
     return aKey.compareTo(bKey) <= 0 ? '$aKey|$bKey' : '$bKey|$aKey';
   }
 
+  Future<void> _ensureSchema(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS rail_edges (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        edge_key TEXT NOT NULL UNIQUE,
+        start_lat REAL NOT NULL,
+        start_lng REAL NOT NULL,
+        end_lat REAL NOT NULL,
+        end_lng REAL NOT NULL,
+        source_route_id INTEGER REFERENCES routes(id) ON DELETE SET NULL,
+        travelled INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now'))
+      )
+    ''');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_rail_edges_travelled ON rail_edges(travelled)');
+  }
+
   Future<void> upsertEdgesFromLine(List<LatLng> points, {int? sourceRouteId}) async {
     if (points.length < 2) return;
     final db = await _db;
+    await _ensureSchema(db);
     final batch = db.batch();
 
     for (var i = 0; i < points.length - 1; i++) {
@@ -39,6 +57,7 @@ class RailEdgeDao {
 
   Future<int> getEdgeCount() async {
     final db = await _db;
+    await _ensureSchema(db);
     final row = await db.rawQuery('SELECT COUNT(*) AS c FROM rail_edges');
     return (row.first['c'] as num?)?.toInt() ?? 0;
   }
@@ -46,6 +65,7 @@ class RailEdgeDao {
   Future<void> insertSeedEdges(List<RailEdge> edges) async {
     if (edges.isEmpty) return;
     final db = await _db;
+    await _ensureSchema(db);
     final batch = db.batch();
 
     for (final edge in edges) {
@@ -72,12 +92,14 @@ class RailEdgeDao {
 
   Future<List<RailEdge>> getAllEdges() async {
     final db = await _db;
+    await _ensureSchema(db);
     final rows = await db.query('rail_edges', orderBy: 'id ASC');
     return rows.map((r) => RailEdge.fromMap(r)).toList();
   }
 
   Future<int> toggleTravelled(int id) async {
     final db = await _db;
+    await _ensureSchema(db);
     return await db.rawUpdate('''
       UPDATE rail_edges
       SET travelled = CASE travelled WHEN 1 THEN 0 ELSE 1 END
