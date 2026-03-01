@@ -18,6 +18,8 @@ TrackBound is a Flutter app for railway enthusiasts to log, visualise and share 
 
 - The app ships with precomputed rail edges in `assets/rail/rail_edges_seed.json`.
 - On first run (or if DB has no rail edges), the seed is loaded into SQLite automatically.
+- Seed rows may be grouped into station/junction-split progression segments via `source_route_id`.
+- In map `Mark Travelled` mode, tapping toggles the whole segment group when available.
 
 ## Build seed from GeoJSON
 
@@ -39,3 +41,5 @@ python tools/rail_model_builder/build_rail_model.py \
 	--bbox 49.8,-8.6,60.9,1.8 \
 	--output assets/rail/rail_edges_seed.json
 ```
+
+After regenerating the seed, reset app data (or reinstall app) to force reseeding if your DB already contains rail edges.

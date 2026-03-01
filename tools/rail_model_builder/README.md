@@ -26,6 +26,12 @@ python tools/rail_model_builder/build_rail_model.py \
   --output assets/rail/rail_edges_seed.json
 ```
 
+This builder splits the rail graph into progression segments at:
+- rail junctions (graph nodes where degree != 2)
+- station-adjacent nodes (snapped within a threshold)
+
+Each output edge row is tagged with a segment group in `source_route_id` so TrackBound can colour/toggle whole segments.
+
 Merge additional local line data (GeoJSON):
 
 ```bash
@@ -41,6 +47,15 @@ Merge an OpenTrainTimes-derived CSV export (manual source prep):
 python tools/rail_model_builder/build_rail_model.py \
   --bbox 49.8,-8.6,60.9,1.8 \
   --opentraintimes-csv data/opentraintimes_edges.csv \
+  --output assets/rail/rail_edges_seed.json
+```
+
+Tune station split snapping distance (meters):
+
+```bash
+python tools/rail_model_builder/build_rail_model.py \
+  --bbox 49.8,-8.6,60.9,1.8 \
+  --station-snap-m 120 \
   --output assets/rail/rail_edges_seed.json
 ```
 

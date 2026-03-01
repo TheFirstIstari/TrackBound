@@ -63,6 +63,8 @@ class _MapPageState extends State<MapPage> {
   bool _showRailNetwork = true;
   bool _markTravelMode = false;
   double _currentZoom = 6.0;
+  LatLngBounds? _visibleBounds;
+  LatLng? _lastCullCenter;
   LatLng? _persistedCenter;
   double? _persistedZoom;
   late Future<_MapData> _mapDataFuture;
@@ -197,7 +199,7 @@ class _MapPageState extends State<MapPage> {
           final segmentPolylines = _buildSegmentPolylines(data.segmentLines, _currentZoom);
           final routePolylines = _buildRoutePolylines(data.routeLines, _currentZoom);
           final railEdges = data.railEdges ?? const <RailEdge>[];
-          final railPolylines = _showRailNetwork ? _buildRailEdgePolylines(railEdges, _currentZoom) : const <Polyline>[];
+          final railPolylines = _showRailNetwork ? _buildRailEdgePolylines(railEdges, _currentZoom, _visibleBounds) : const <Polyline>[];
           final stationMarkers = _buildStationMarkers(data.visitedStations, _currentZoom);
 
           return FlutterMap(
@@ -206,10 +208,37 @@ class _MapPageState extends State<MapPage> {
               zoom: data.initialZoom,
               onPositionChanged: (position, hasGesture) {
                 final nextZoom = position.zoom ?? _currentZoom;
-                if ((nextZoom - _currentZoom).abs() >= 0.25) {
-                  setState(() => _currentZoom = nextZoom);
-                }
                 final center = position.center;
+                final bounds = position.bounds;
+
+                var shouldRebuild = false;
+                var updatedZoom = _currentZoom;
+
+                if ((nextZoom - _currentZoom).abs() >= 0.35) {
+                  updatedZoom = nextZoom;
+                  shouldRebuild = true;
+                }
+
+                if (center != null) {
+                  if (_lastCullCenter == null || _distanceMeters(_lastCullCenter!, center) > 1200) {
+                    _lastCullCenter = center;
+                    shouldRebuild = true;
+                  }
+                }
+
+                if (bounds != null && (_visibleBounds == null || shouldRebuild)) {
+                  shouldRebuild = true;
+                }
+
+                if (shouldRebuild) {
+                  setState(() {
+                    _currentZoom = updatedZoom;
+                    if (bounds != null) {
+                      _visibleBounds = bounds;
+                    }
+                  });
+                }
+
                 if (center != null) {
                   _persistCamera(center, nextZoom);
                 }
@@ -248,6 +277,8 @@ class _MapPageState extends State<MapPage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text('• Rail overlay toggle: shows rail network segments.'),
+              SizedBox(height: 6),
+              Text('• Untravelled rail edges render at high zoom for performance.'),
               SizedBox(height: 6),
               Text('• Mark travelled toggle: tap near a rail edge to mark/unmark travelled.'),
               SizedBox(height: 6),
@@ -369,14 +400,29 @@ class _MapPageState extends State<MapPage> {
     );
   }
 
-  List<Polyline> _buildRailEdgePolylines(List<RailEdge> edges, double zoom) {
+  List<Polyline> _buildRailEdgePolylines(List<RailEdge> edges, double zoom, LatLngBounds? bounds) {
     if (edges.isEmpty) return const <Polyline>[];
 
-    final showUntravelled = zoom >= 9.0;
+    final showUntravelled = zoom >= 13.0;
+    final maxTravelled = zoom < 8 ? 3000 : 12000;
+    final maxUntravelled = zoom < 14 ? 2500 : 8000;
+
     final out = <Polyline>[];
+    var travelledCount = 0;
+    var untravelledCount = 0;
 
     for (final edge in edges) {
-      if (!edge.travelled && !showUntravelled) continue;
+      if (!_edgeIntersectsBounds(edge, bounds)) continue;
+
+      if (edge.travelled) {
+        if (travelledCount >= maxTravelled) continue;
+        travelledCount += 1;
+      } else {
+        if (!showUntravelled) continue;
+        if (untravelledCount >= maxUntravelled) continue;
+        untravelledCount += 1;
+      }
+
       out.add(
         Polyline(
           points: [LatLng(edge.startLat, edge.startLng), LatLng(edge.endLat, edge.endLng)],
@@ -388,6 +434,19 @@ class _MapPageState extends State<MapPage> {
     return out;
   }
 
+  bool _edgeIntersectsBounds(RailEdge edge, LatLngBounds? bounds) {
+    if (bounds == null) {
+      return edge.travelled;
+    }
+    final a = LatLng(edge.startLat, edge.startLng);
+    final b = LatLng(edge.endLat, edge.endLng);
+    if (bounds.contains(a) || bounds.contains(b)) {
+      return true;
+    }
+    final mid = LatLng((edge.startLat + edge.endLat) / 2, (edge.startLng + edge.endLng) / 2);
+    return bounds.contains(mid);
+  }
+
   Future<void> _toggleNearestRailEdge(LatLng tap, List<RailEdge> edges) async {
     final edge = _findNearestEdge(tap, edges, maxDistanceMeters: 700);
     if (edge == null) {
@@ -396,7 +455,11 @@ class _MapPageState extends State<MapPage> {
       return;
     }
 
-    await RailEdgeDao().toggleTravelled(edge.id!);
+    if (edge.sourceRouteId != null) {
+      await RailEdgeDao().toggleTravelledBySourceRouteId(edge.sourceRouteId!);
+    } else {
+      await RailEdgeDao().toggleTravelled(edge.id!);
+    }
     if (!mounted) return;
     setState(() {
       _mapDataFuture = _loadMapDataWithSeed();
@@ -404,10 +467,23 @@ class _MapPageState extends State<MapPage> {
   }
 
   RailEdge? _findNearestEdge(LatLng point, List<RailEdge> edges, {required double maxDistanceMeters}) {
+    final latRadius = maxDistanceMeters / 111320.0;
+    final lngRadius = maxDistanceMeters / (111320.0 * cos(_toRadians(point.latitude)).abs().clamp(0.1, 1.0));
+
+    final candidates = edges.where((edge) {
+      final minLat = min(edge.startLat, edge.endLat);
+      final maxLat = max(edge.startLat, edge.endLat);
+      final minLng = min(edge.startLng, edge.endLng);
+      final maxLng = max(edge.startLng, edge.endLng);
+      final nearLat = !(point.latitude + latRadius < minLat || point.latitude - latRadius > maxLat);
+      final nearLng = !(point.longitude + lngRadius < minLng || point.longitude - lngRadius > maxLng);
+      return nearLat && nearLng;
+    });
+
     RailEdge? best;
     var bestDistance = double.infinity;
 
-    for (final edge in edges) {
+    for (final edge in candidates) {
       if (edge.id == null) continue;
       final a = LatLng(edge.startLat, edge.startLng);
       final b = LatLng(edge.endLat, edge.endLng);

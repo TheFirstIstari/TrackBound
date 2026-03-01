@@ -106,4 +106,20 @@ class RailEdgeDao {
       WHERE id = ?
     ''', [id]);
   }
+
+  Future<int> toggleTravelledBySourceRouteId(int sourceRouteId) async {
+    final db = await _db;
+    await _ensureSchema(db);
+    final current = await db.rawQuery(
+      'SELECT travelled FROM rail_edges WHERE source_route_id = ? LIMIT 1',
+      [sourceRouteId],
+    );
+    if (current.isEmpty) return 0;
+    final currentValue = ((current.first['travelled'] as num?)?.toInt() ?? 0) == 1;
+    final nextValue = currentValue ? 0 : 1;
+    return await db.rawUpdate(
+      'UPDATE rail_edges SET travelled = ? WHERE source_route_id = ?',
+      [nextValue, sourceRouteId],
+    );
+  }
 }
