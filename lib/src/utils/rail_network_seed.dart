@@ -8,22 +8,28 @@ class RailNetworkSeed {
   static const _assetPath = 'assets/rail/rail_edges_seed.json';
   static const _prefSeedFingerprint = 'rail.seed.fingerprint.v1';
   static const _prefSeedCount = 'rail.seed.count.v1';
+  static const _prefSeedSchemaVersion = 'rail.seed.schema.version.v1';
+  static const _seedSchemaVersion = 2;
 
-  static Future<void> ensureLoaded() async {
+  static Future<void> ensureLoaded({bool force = false}) async {
     final dao = RailEdgeDao();
     final raw = await rootBundle.loadString(_assetPath);
     final seedEdges = _parseSeedEdges(raw);
+    if (seedEdges.isEmpty) return;
     final fingerprint = _fnv1a32Hex(raw);
 
     final prefs = await SharedPreferences.getInstance();
     final previousFingerprint = prefs.getString(_prefSeedFingerprint);
     final previousSeedCount = prefs.getInt(_prefSeedCount);
+    final previousSchemaVersion = prefs.getInt(_prefSeedSchemaVersion) ?? 0;
     final dbCount = await dao.getEdgeCount();
 
     final needsReseed =
+        force ||
         dbCount == 0 ||
         dbCount != seedEdges.length ||
         previousSeedCount != seedEdges.length ||
+        previousSchemaVersion != _seedSchemaVersion ||
         previousFingerprint != fingerprint;
 
     if (!needsReseed) return;
@@ -31,6 +37,7 @@ class RailNetworkSeed {
     await dao.replaceWithSeedEdges(seedEdges, preserveTravelled: true);
     await prefs.setString(_prefSeedFingerprint, fingerprint);
     await prefs.setInt(_prefSeedCount, seedEdges.length);
+    await prefs.setInt(_prefSeedSchemaVersion, _seedSchemaVersion);
   }
 
   static List<RailEdge> _parseSeedEdges(String raw) {

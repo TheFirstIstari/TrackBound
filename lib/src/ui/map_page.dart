@@ -136,12 +136,12 @@ class _MapPageState extends State<MapPage> {
 
   void _refreshMapData() {
     setState(() {
-      _mapDataFuture = _loadMapDataWithSeed();
+      _mapDataFuture = _loadMapDataWithSeed(forceReseed: true);
     });
   }
 
-  Future<_MapData> _loadMapDataWithSeed() async {
-    await RailNetworkSeed.ensureLoaded();
+  Future<_MapData> _loadMapDataWithSeed({bool forceReseed = false}) async {
+    await RailNetworkSeed.ensureLoaded(force: forceReseed);
     return _loadMapData();
   }
 
