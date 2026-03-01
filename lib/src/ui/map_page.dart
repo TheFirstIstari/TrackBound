@@ -164,6 +164,38 @@ class _MapPageState extends State<MapPage> {
     );
   }
 
+  Future<void> _hardResetRailData() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Hard Reset Rail Data'),
+        content: const Text('Clear all rail edges and reload from bundled seed?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Hard Reset')),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      final dao = RailEdgeDao();
+      await dao.replaceWithSeedEdges(const <RailEdge>[], preserveTravelled: false);
+      await RailNetworkSeed.ensureLoaded(force: true);
+      _refreshMapData();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Rail data hard reset complete')),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Hard reset failed')),
+      );
+    }
+  }
+
   Future<_MapData> _loadMapDataWithSeed({bool forceReseed = false}) async {
     await RailNetworkSeed.ensureLoaded(force: forceReseed);
     return _loadMapData();
@@ -216,6 +248,11 @@ class _MapPageState extends State<MapPage> {
             onPressed: _resetAllTravelled,
             icon: const Icon(Icons.restart_alt),
             tooltip: 'Reset travelled segments',
+          ),
+          IconButton(
+            onPressed: _hardResetRailData,
+            icon: const Icon(Icons.delete_sweep),
+            tooltip: 'Hard reset rail data',
           ),
           IconButton(
             onPressed: _showControlsHelp,
@@ -337,6 +374,8 @@ class _MapPageState extends State<MapPage> {
               Text('• Mark travelled toggle: tap near a rail edge to mark/unmark travelled.'),
               SizedBox(height: 6),
               Text('• Reset (restart icon): sets all rail segments to untravelled.'),
+              SizedBox(height: 6),
+              Text('• Hard reset (broom icon): clears rail edges and reloads bundled seed.'),
               SizedBox(height: 6),
               Text('• Drawing on the map is deprecated in this version.'),
               SizedBox(height: 6),

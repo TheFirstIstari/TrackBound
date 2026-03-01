@@ -7,6 +7,7 @@ TrackBound is a Flutter app for railway enthusiasts to log, visualise and share 
 - `Rail Overlay` (app bar rail icon): show/hide the rail network overlay.
 - `Mark Travelled` (app bar checklist icon): tap near a rail edge to toggle travelled status.
 - `Reset Progress` (app bar restart icon): set all rail segments to untravelled.
+- `Hard Reset Rail Data` (app bar broom icon): clear rail edges and reload from bundled seed.
 - `Help` (app bar `?` icon): opens control reference dialog.
 - `Refresh` (app bar refresh icon): reload all map data from the database.
 
