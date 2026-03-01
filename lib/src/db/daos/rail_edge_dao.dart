@@ -37,6 +37,39 @@ class RailEdgeDao {
     await batch.commit(noResult: true);
   }
 
+  Future<int> getEdgeCount() async {
+    final db = await _db;
+    final row = await db.rawQuery('SELECT COUNT(*) AS c FROM rail_edges');
+    return (row.first['c'] as num?)?.toInt() ?? 0;
+  }
+
+  Future<void> insertSeedEdges(List<RailEdge> edges) async {
+    if (edges.isEmpty) return;
+    final db = await _db;
+    final batch = db.batch();
+
+    for (final edge in edges) {
+      batch.rawInsert(
+        '''
+        INSERT OR IGNORE INTO rail_edges(
+          edge_key, start_lat, start_lng, end_lat, end_lng, source_route_id, travelled
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''',
+        [
+          edge.edgeKey,
+          edge.startLat,
+          edge.startLng,
+          edge.endLat,
+          edge.endLng,
+          edge.sourceRouteId,
+          edge.travelled ? 1 : 0,
+        ],
+      );
+    }
+
+    await batch.commit(noResult: true);
+  }
+
   Future<List<RailEdge>> getAllEdges() async {
     final db = await _db;
     final rows = await db.query('rail_edges', orderBy: 'id ASC');

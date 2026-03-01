@@ -11,6 +11,7 @@ import '../db/daos/route_dao.dart';
 import '../db/daos/rail_edge_dao.dart';
 import '../models/rail_edge.dart';
 import '../models/train_route.dart';
+import '../utils/rail_network_seed.dart';
 
 class _VisitedStation {
   final int id;
@@ -75,7 +76,7 @@ class _MapPageState extends State<MapPage> {
     super.initState();
     _loadPersistedCamera();
     _initCaching();
-    _mapDataFuture = _loadMapData();
+    _mapDataFuture = _loadMapDataWithSeed();
   }
 
   Future<void> _loadPersistedCamera() async {
@@ -92,7 +93,7 @@ class _MapPageState extends State<MapPage> {
       }
       if (mounted) {
         setState(() {
-          _mapDataFuture = _loadMapData();
+          _mapDataFuture = _loadMapDataWithSeed();
         });
       }
     } catch (_) {
@@ -113,8 +114,13 @@ class _MapPageState extends State<MapPage> {
 
   void _refreshMapData() {
     setState(() {
-      _mapDataFuture = _loadMapData();
+      _mapDataFuture = _loadMapDataWithSeed();
     });
+  }
+
+  Future<_MapData> _loadMapDataWithSeed() async {
+    await RailNetworkSeed.ensureLoaded();
+    return _loadMapData();
   }
 
   Future<void> _initCaching() async {
@@ -161,9 +167,19 @@ class _MapPageState extends State<MapPage> {
             tooltip: _showRailNetwork ? 'Rail network overlay: on' : 'Rail network overlay: off',
           ),
           IconButton(
-            onPressed: () => setState(() => _markTravelMode = !_markTravelMode),
+            onPressed: () => setState(() {
+              _markTravelMode = !_markTravelMode;
+              if (_markTravelMode) {
+                _drawMode = false;
+              }
+            }),
             icon: Icon(_markTravelMode ? Icons.playlist_add_check_circle : Icons.playlist_add_check),
             tooltip: _markTravelMode ? 'Mark travelled mode: on' : 'Mark travelled mode: off',
+          ),
+          IconButton(
+            onPressed: _showControlsHelp,
+            icon: const Icon(Icons.help_outline),
+            tooltip: 'Map controls help',
           ),
           IconButton(onPressed: _refreshMapData, icon: const Icon(Icons.refresh), tooltip: 'Refresh map data'),
         ],
@@ -256,7 +272,12 @@ class _MapPageState extends State<MapPage> {
         children: [
           FloatingActionButton(
             heroTag: 'draw',
-            onPressed: () => setState(() => _drawMode = !_drawMode),
+            onPressed: () => setState(() {
+              _drawMode = !_drawMode;
+              if (_drawMode) {
+                _markTravelMode = false;
+              }
+            }),
             child: Icon(_drawMode ? Icons.edit_off : Icons.draw),
             tooltip: _drawMode ? 'Exit draw mode' : 'Enter draw mode',
           ),
@@ -293,8 +314,39 @@ class _MapPageState extends State<MapPage> {
     setState(() {
       _draftPoints.clear();
       _drawMode = false;
-      _mapDataFuture = _loadMapData();
+      _mapDataFuture = _loadMapDataWithSeed();
     });
+  }
+
+  void _showControlsHelp() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Map Controls'),
+        content: const SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('• Draw button: add points to a new route polyline.'),
+              SizedBox(height: 6),
+              Text('• Save button: saves drawn line as a route and rail edges.'),
+              SizedBox(height: 6),
+              Text('• Route-snap toggle: snaps taps to nearest rail/route geometry.'),
+              SizedBox(height: 6),
+              Text('• Rail overlay toggle: shows rail network segments.'),
+              SizedBox(height: 6),
+              Text('• Mark travelled toggle: tap near a rail edge to mark/unmark travelled.'),
+              SizedBox(height: 6),
+              Text('• Refresh: reloads DB-backed map layers.'),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+        ],
+      ),
+    );
   }
 
   Future<_MapData> _loadMapData() async {
@@ -432,7 +484,7 @@ class _MapPageState extends State<MapPage> {
     await RailEdgeDao().toggleTravelled(edge.id!);
     if (!mounted) return;
     setState(() {
-      _mapDataFuture = _loadMapData();
+      _mapDataFuture = _loadMapDataWithSeed();
     });
   }
 

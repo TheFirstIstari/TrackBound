@@ -1,0 +1,47 @@
+[
+  {
+    "edge_key": "51.432900,-0.551700|51.433700,-0.546900",
+    "start_lat": 51.4329,
+    "start_lng": -0.5517,
+    "end_lat": 51.4337,
+    "end_lng": -0.5469,
+    "source_route_id": null,
+    "travelled": 0
+  },
+  {
+    "edge_key": "51.433700,-0.546900|51.434400,-0.542100",
+    "start_lat": 51.4337,
+    "start_lng": -0.5469,
+    "end_lat": 51.4344,
+    "end_lng": -0.5421,
+    "source_route_id": null,
+    "travelled": 0
+  },
+  {
+    "edge_key": "51.434400,-0.542100|51.435100,-0.537400",
+    "start_lat": 51.4344,
+    "start_lng": -0.5421,
+    "end_lat": 51.4351,
+    "end_lng": -0.5374,
+    "source_route_id": null,
+    "travelled": 0
+  },
+  {
+    "edge_key": "51.435100,-0.537400|51.435700,-0.533200",
+    "start_lat": 51.4351,
+    "start_lng": -0.5374,
+    "end_lat": 51.4357,
+    "end_lng": -0.5332,
+    "source_route_id": null,
+    "travelled": 0
+  },
+  {
+    "edge_key": "51.435700,-0.533200|51.436500,-0.529200",
+    "start_lat": 51.4357,
+    "start_lng": -0.5332,
+    "end_lat": 51.4365,
+    "end_lng": -0.5292,
+    "source_route_id": null,
+    "travelled": 0
+  }
+]
