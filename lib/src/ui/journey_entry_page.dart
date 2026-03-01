@@ -5,6 +5,7 @@ import '../db/daos/journey_segment_dao.dart';
 import '../db/database.dart';
 import '../models/journey.dart';
 import '../models/journey_segment.dart';
+import '../utils/station_lookup.dart';
 
 class JourneyEntryPage extends StatefulWidget {
   const JourneyEntryPage({super.key});
@@ -26,6 +27,9 @@ class _JourneyEntryPageState extends State<JourneyEntryPage> {
   final _trainNoCtrl = TextEditingController();
   final _classCtrl = TextEditingController();
   final _notesCtrl = TextEditingController();
+  final _stationLookup = StationLookup();
+  bool _resolvingStart = false;
+  bool _resolvingEnd = false;
   int? _selectedRouteId;
 
   @override
@@ -38,6 +42,70 @@ class _JourneyEntryPageState extends State<JourneyEntryPage> {
       if (routeId is int) {
         _selectedRouteId = routeId;
       }
+    }
+  }
+
+  Future<void> _resolveStartStation() async {
+    setState(() => _resolvingStart = true);
+    try {
+      final localMatches = await StationDao().searchStationsByName(_startCtrl.text, limit: 1);
+      if (localMatches.isNotEmpty) {
+        final m = localMatches.first;
+        final lat = (m['latitude'] as num?)?.toDouble();
+        final lng = (m['longitude'] as num?)?.toDouble();
+        if (lat != null && lng != null) {
+          _startCtrl.text = (m['name'] as String?) ?? _startCtrl.text;
+          _startLatCtrl.text = lat.toStringAsFixed(6);
+          _startLngCtrl.text = lng.toStringAsFixed(6);
+          return;
+        }
+      }
+
+      final remote = await _stationLookup.search(_startCtrl.text, limit: 1);
+      if (remote.isNotEmpty) {
+        final s = remote.first;
+        _startCtrl.text = s.name;
+        _startLatCtrl.text = s.latitude.toStringAsFixed(6);
+        _startLngCtrl.text = s.longitude.toStringAsFixed(6);
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Could not resolve start station')));
+      }
+    } finally {
+      if (mounted) setState(() => _resolvingStart = false);
+    }
+  }
+
+  Future<void> _resolveEndStation() async {
+    setState(() => _resolvingEnd = true);
+    try {
+      final localMatches = await StationDao().searchStationsByName(_endCtrl.text, limit: 1);
+      if (localMatches.isNotEmpty) {
+        final m = localMatches.first;
+        final lat = (m['latitude'] as num?)?.toDouble();
+        final lng = (m['longitude'] as num?)?.toDouble();
+        if (lat != null && lng != null) {
+          _endCtrl.text = (m['name'] as String?) ?? _endCtrl.text;
+          _endLatCtrl.text = lat.toStringAsFixed(6);
+          _endLngCtrl.text = lng.toStringAsFixed(6);
+          return;
+        }
+      }
+
+      final remote = await _stationLookup.search(_endCtrl.text, limit: 1);
+      if (remote.isNotEmpty) {
+        final s = remote.first;
+        _endCtrl.text = s.name;
+        _endLatCtrl.text = s.latitude.toStringAsFixed(6);
+        _endLngCtrl.text = s.longitude.toStringAsFixed(6);
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Could not resolve end station')));
+      }
+    } finally {
+      if (mounted) setState(() => _resolvingEnd = false);
     }
   }
 
@@ -75,6 +143,13 @@ class _JourneyEntryPageState extends State<JourneyEntryPage> {
         int? endId;
         final stationDao = StationDao();
         try {
+          if (_startCtrl.text.isNotEmpty && (_startLatCtrl.text.trim().isEmpty || _startLngCtrl.text.trim().isEmpty)) {
+            await _resolveStartStation();
+          }
+          if (_endCtrl.text.isNotEmpty && (_endLatCtrl.text.trim().isEmpty || _endLngCtrl.text.trim().isEmpty)) {
+            await _resolveEndStation();
+          }
+
           final sLat = double.tryParse(_startLatCtrl.text);
           final sLng = double.tryParse(_startLngCtrl.text);
           if (sLat != null && sLng != null) {
@@ -99,6 +174,10 @@ class _JourneyEntryPageState extends State<JourneyEntryPage> {
           if (sLat != null && sLng != null && eLat != null && eLng != null) {
             final wkt = 'LINESTRING(${sLng.toString()} ${sLat.toString()}, ${eLng.toString()} ${eLat.toString()})';
             final seg = JourneySegment(journeyId: id, routeId: _selectedRouteId, geometryWkt: wkt);
+            await JourneySegmentDao().insertSegment(seg);
+          } else if (_selectedRouteId != null) {
+            // still persist a route-linked segment so map can render travelled sections from route geometry
+            final seg = JourneySegment(journeyId: id, routeId: _selectedRouteId);
             await JourneySegmentDao().insertSegment(seg);
           }
         } catch (e) {
@@ -133,6 +212,16 @@ class _JourneyEntryPageState extends State<JourneyEntryPage> {
                 decoration: const InputDecoration(labelText: 'Start Station'),
                 validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
               ),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: _resolvingStart ? null : _resolveStartStation,
+                  icon: _resolvingStart
+                      ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.my_location),
+                  label: const Text('Auto-fill start coords'),
+                ),
+              ),
               Row(children: [
                 Expanded(child: TextFormField(controller: _startLatCtrl, decoration: const InputDecoration(labelText: 'Start Lat'))),
                 const SizedBox(width: 8),
@@ -142,6 +231,16 @@ class _JourneyEntryPageState extends State<JourneyEntryPage> {
                 controller: _endCtrl,
                 decoration: const InputDecoration(labelText: 'End Station'),
                 validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
+              ),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: _resolvingEnd ? null : _resolveEndStation,
+                  icon: _resolvingEnd
+                      ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.my_location),
+                  label: const Text('Auto-fill end coords'),
+                ),
               ),
               if (_selectedRouteId != null)
                 Padding(

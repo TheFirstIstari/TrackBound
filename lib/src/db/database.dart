@@ -16,7 +16,7 @@ class AppDatabase {
   Future<Database> _initDB(String fileName) async {
     final dbPath = await getDatabasesPath();
     final path = join(dbPath, fileName);
-    return await openDatabase(path, version: 1, onCreate: _createDB);
+    return await openDatabase(path, version: 2, onCreate: _createDB, onUpgrade: _onUpgrade);
   }
 
   Future _createDB(Database db, int version) async {
@@ -77,6 +77,18 @@ class AppDatabase {
         caption TEXT,
         created_at TEXT DEFAULT (datetime('now'))
       );''',
+      '''CREATE TABLE rail_edges (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        edge_key TEXT NOT NULL UNIQUE,
+        start_lat REAL NOT NULL,
+        start_lng REAL NOT NULL,
+        end_lat REAL NOT NULL,
+        end_lng REAL NOT NULL,
+        source_route_id INTEGER REFERENCES routes(id) ON DELETE SET NULL,
+        travelled INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now'))
+      );''',
+      '''CREATE INDEX idx_rail_edges_travelled ON rail_edges(travelled);''',
     ];
 
     final batch = db.batch();
@@ -84,6 +96,23 @@ class AppDatabase {
       batch.execute(s);
     }
     await batch.commit();
+  }
+
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await db.execute('''CREATE TABLE IF NOT EXISTS rail_edges (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        edge_key TEXT NOT NULL UNIQUE,
+        start_lat REAL NOT NULL,
+        start_lng REAL NOT NULL,
+        end_lat REAL NOT NULL,
+        end_lng REAL NOT NULL,
+        source_route_id INTEGER REFERENCES routes(id) ON DELETE SET NULL,
+        travelled INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now'))
+      );''');
+      await db.execute('''CREATE INDEX IF NOT EXISTS idx_rail_edges_travelled ON rail_edges(travelled);''');
+    }
   }
 
   Future close() async {

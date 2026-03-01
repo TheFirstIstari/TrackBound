@@ -51,6 +51,20 @@ class StationDao {
     return rows.first;
   }
 
+  Future<List<Map<String, Object?>>> searchStationsByName(String query, {int limit = 8}) async {
+    final db = await _db;
+    final q = query.trim();
+    if (q.isEmpty) return const <Map<String, Object?>>[];
+    final rows = await db.query(
+      'stations',
+      where: 'name LIKE ?',
+      whereArgs: ['%$q%'],
+      orderBy: 'name ASC',
+      limit: limit,
+    );
+    return rows;
+  }
+
   Future<List<Map<String, Object?>>> getVisitedStations() async {
     final db = await _db;
     final rows = await db.rawQuery('''

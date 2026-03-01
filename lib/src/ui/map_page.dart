@@ -2,10 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:flutter_map_tile_caching/flutter_map_tile_caching.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:math';
 import '../db/daos/station_dao.dart';
 import '../db/daos/journey_segment_dao.dart';
 import '../db/daos/journey_dao.dart';
 import '../db/daos/route_dao.dart';
+import '../db/daos/rail_edge_dao.dart';
+import '../models/rail_edge.dart';
 import '../models/train_route.dart';
 
 class _VisitedStation {
@@ -27,6 +31,7 @@ class _VisitedStation {
 class _MapData {
   final List<List<LatLng>> segmentLines;
   final List<List<LatLng>> routeLines;
+  final List<RailEdge>? railEdges;
   final List<_VisitedStation> visitedStations;
   final LatLng initialCenter;
   final double initialZoom;
@@ -34,6 +39,7 @@ class _MapData {
   const _MapData({
     required this.segmentLines,
     required this.routeLines,
+    required this.railEdges,
     required this.visitedStations,
     required this.initialCenter,
     required this.initialZoom,
@@ -49,17 +55,66 @@ class MapPage extends StatefulWidget {
 }
 
 class _MapPageState extends State<MapPage> {
+  static const _prefCenterLat = 'map.center.lat';
+  static const _prefCenterLng = 'map.center.lng';
+  static const _prefZoom = 'map.zoom';
+
   bool _initialized = false;
   bool _drawMode = false;
+  bool _snapToRoutes = true;
+  bool _showRailNetwork = true;
+  bool _markTravelMode = false;
   double _currentZoom = 6.0;
+  LatLng? _persistedCenter;
+  double? _persistedZoom;
   final List<LatLng> _draftPoints = [];
   late Future<_MapData> _mapDataFuture;
 
   @override
   void initState() {
     super.initState();
+    _loadPersistedCamera();
     _initCaching();
     _mapDataFuture = _loadMapData();
+  }
+
+  Future<void> _loadPersistedCamera() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final lat = prefs.getDouble(_prefCenterLat);
+      final lng = prefs.getDouble(_prefCenterLng);
+      final zoom = prefs.getDouble(_prefZoom);
+      if (lat != null && lng != null) {
+        _persistedCenter = LatLng(lat, lng);
+      }
+      if (zoom != null) {
+        _persistedZoom = zoom;
+      }
+      if (mounted) {
+        setState(() {
+          _mapDataFuture = _loadMapData();
+        });
+      }
+    } catch (_) {
+      // ignore persistence issues
+    }
+  }
+
+  Future<void> _persistCamera(LatLng center, double zoom) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setDouble(_prefCenterLat, center.latitude);
+      await prefs.setDouble(_prefCenterLng, center.longitude);
+      await prefs.setDouble(_prefZoom, zoom);
+    } catch (_) {
+      // ignore persistence issues
+    }
+  }
+
+  void _refreshMapData() {
+    setState(() {
+      _mapDataFuture = _loadMapData();
+    });
   }
 
   Future<void> _initCaching() async {
@@ -92,7 +147,27 @@ class _MapPageState extends State<MapPage> {
     });
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Map')),
+      appBar: AppBar(
+        title: const Text('Map'),
+        actions: [
+          IconButton(
+            onPressed: () => setState(() => _snapToRoutes = !_snapToRoutes),
+            icon: Icon(_snapToRoutes ? Icons.alt_route : Icons.gesture),
+            tooltip: _snapToRoutes ? 'Snap drawing to routes: on' : 'Snap drawing to routes: off',
+          ),
+          IconButton(
+            onPressed: () => setState(() => _showRailNetwork = !_showRailNetwork),
+            icon: Icon(_showRailNetwork ? Icons.railway_alert : Icons.railway_alert_outlined),
+            tooltip: _showRailNetwork ? 'Rail network overlay: on' : 'Rail network overlay: off',
+          ),
+          IconButton(
+            onPressed: () => setState(() => _markTravelMode = !_markTravelMode),
+            icon: Icon(_markTravelMode ? Icons.playlist_add_check_circle : Icons.playlist_add_check),
+            tooltip: _markTravelMode ? 'Mark travelled mode: on' : 'Mark travelled mode: off',
+          ),
+          IconButton(onPressed: _refreshMapData, icon: const Icon(Icons.refresh), tooltip: 'Refresh map data'),
+        ],
+      ),
       body: FutureBuilder<_MapData>(
         future: _mapDataFuture,
         builder: (context, snap) {
@@ -107,6 +182,7 @@ class _MapPageState extends State<MapPage> {
               _MapData(
                 segmentLines: <List<LatLng>>[],
                 routeLines: <List<LatLng>>[],
+                railEdges: <RailEdge>[],
                 visitedStations: <_VisitedStation>[],
                 initialCenter: LatLng(51.5074, -0.1278),
                 initialZoom: 6.0,
@@ -118,6 +194,8 @@ class _MapPageState extends State<MapPage> {
 
           final segmentPolylines = _buildSegmentPolylines(data.segmentLines, _currentZoom);
           final routePolylines = _buildRoutePolylines(data.routeLines, _currentZoom);
+          final railEdges = data.railEdges ?? const <RailEdge>[];
+          final railPolylines = _showRailNetwork ? _buildRailEdgePolylines(railEdges, _currentZoom) : const <Polyline>[];
           final stationMarkers = _buildStationMarkers(data.visitedStations, _currentZoom);
 
           final draftPolyline = _draftPoints.length > 1
@@ -133,11 +211,27 @@ class _MapPageState extends State<MapPage> {
                 if ((nextZoom - _currentZoom).abs() >= 0.25) {
                   setState(() => _currentZoom = nextZoom);
                 }
+                final center = position.center;
+                if (center != null) {
+                  _persistCamera(center, nextZoom);
+                }
               },
               onTap: (pos, latlng) {
+                if (_markTravelMode) {
+                  _toggleNearestRailEdge(latlng, railEdges);
+                  return;
+                }
                 if (_drawMode) {
+                  final snapLines = railEdges.isNotEmpty
+                      ? railEdges
+                          .map((e) => <LatLng>[LatLng(e.startLat, e.startLng), LatLng(e.endLat, e.endLng)])
+                          .toList()
+                      : data.routeLines;
+                  final nextPoint = _snapToRoutes
+                      ? _snapPointToRoute(latlng, snapLines, maxDistanceMeters: 1500) ?? latlng
+                      : latlng;
                   setState(() {
-                    _draftPoints.add(latlng);
+                    _draftPoints.add(nextPoint);
                   });
                 }
               },
@@ -149,6 +243,7 @@ class _MapPageState extends State<MapPage> {
                 tileProvider: networkTileProvider,
               ),
               if (stationMarkers.isNotEmpty) MarkerLayer(markers: stationMarkers),
+              if (railPolylines.isNotEmpty) PolylineLayer(polylineCulling: true, polylines: railPolylines),
               if (segmentPolylines.isNotEmpty) PolylineLayer(polylineCulling: true, polylines: segmentPolylines),
               if (routePolylines.isNotEmpty) PolylineLayer(polylineCulling: true, polylines: routePolylines),
               if (draftPolyline.isNotEmpty) PolylineLayer(polylineCulling: true, polylines: draftPolyline),
@@ -193,7 +288,8 @@ class _MapPageState extends State<MapPage> {
     final coords = _draftPoints.map((p) => '${p.longitude} ${p.latitude}').join(', ');
     final wkt = 'LINESTRING($coords)';
     final rt = TrainRoute(serviceId: 0, name: name, geometryWkt: wkt);
-    await RouteDao().insertRoute(rt);
+    final routeId = await RouteDao().insertRoute(rt);
+    await RailEdgeDao().upsertEdgesFromLine(_draftPoints, sourceRouteId: routeId);
     setState(() {
       _draftPoints.clear();
       _drawMode = false;
@@ -206,11 +302,40 @@ class _MapPageState extends State<MapPage> {
     final fallbackLines = await JourneyDao().getFallbackJourneyLines();
     final routes = await RouteDao().getAllRoutes();
     final visitedStationsRows = await StationDao().getVisitedStations();
+    final railEdgeDao = RailEdgeDao();
+    final routeById = <int, List<LatLng>>{};
+
+    for (final rt in routes) {
+      if (rt.id == null) continue;
+      final pts = _parseWktLineString(rt.geometryWkt);
+      if (pts.isNotEmpty) {
+        routeById[rt.id!] = pts;
+        await railEdgeDao.upsertEdgesFromLine(pts, sourceRouteId: rt.id);
+      }
+    }
+
+    final railEdges = await railEdgeDao.getAllEdges();
 
     final segmentLines = <List<LatLng>>[
       ...segments
         .map((s) {
-          return _parseWktLineString(s.geometryWkt);
+          final explicit = _parseWktLineString(s.geometryWkt);
+          if (explicit.isNotEmpty) {
+            return explicit;
+          }
+
+          if (s.routeId != null) {
+            final routePoints = routeById[s.routeId!];
+            if (routePoints != null && routePoints.length >= 2) {
+              final sliced = _sliceRoutePoints(routePoints, s.startPointIndex, s.endPointIndex);
+              if (sliced.length >= 2) {
+                return sliced;
+              }
+              return routePoints;
+            }
+          }
+
+          return <LatLng>[];
         })
         .where((points) => points.isNotEmpty)
         .toList(),
@@ -229,7 +354,7 @@ class _MapPageState extends State<MapPage> {
     List<LatLng> selectedPoints = const <LatLng>[];
 
     for (final rt in routes) {
-      final pts = _parseWktLineString(rt.geometryWkt);
+      final pts = rt.id != null ? (routeById[rt.id!] ?? <LatLng>[]) : _parseWktLineString(rt.geometryWkt);
       if (pts.isEmpty) continue;
       final isSelected = widget.routeId != null && rt.id == widget.routeId;
       if (isSelected) {
@@ -256,7 +381,10 @@ class _MapPageState extends State<MapPage> {
     LatLng initialCenter = LatLng(51.5074, -0.1278);
     double initialZoom = 6.0;
 
-    if (selectedPoints.isNotEmpty) {
+    if (_persistedCenter != null && _persistedZoom != null && widget.routeId == null) {
+      initialCenter = _persistedCenter!;
+      initialZoom = _persistedZoom!;
+    } else if (selectedPoints.isNotEmpty) {
       initialCenter = _centroid(selectedPoints);
       initialZoom = 10.0;
     } else if (segmentLines.isNotEmpty && segmentLines.first.isNotEmpty) {
@@ -267,10 +395,67 @@ class _MapPageState extends State<MapPage> {
     return _MapData(
       segmentLines: segmentLines,
       routeLines: routeLines,
+      railEdges: railEdges,
       visitedStations: visitedStations,
       initialCenter: initialCenter,
       initialZoom: initialZoom,
     );
+  }
+
+  List<Polyline> _buildRailEdgePolylines(List<RailEdge> edges, double zoom) {
+    if (edges.isEmpty) return const <Polyline>[];
+
+    final showUntravelled = zoom >= 9.0;
+    final out = <Polyline>[];
+
+    for (final edge in edges) {
+      if (!edge.travelled && !showUntravelled) continue;
+      out.add(
+        Polyline(
+          points: [LatLng(edge.startLat, edge.startLng), LatLng(edge.endLat, edge.endLng)],
+          color: edge.travelled ? const Color.fromARGB(220, 76, 175, 80) : const Color.fromARGB(120, 120, 120, 120),
+          strokeWidth: edge.travelled ? 4.5 : 2.0,
+        ),
+      );
+    }
+    return out;
+  }
+
+  Future<void> _toggleNearestRailEdge(LatLng tap, List<RailEdge> edges) async {
+    final edge = _findNearestEdge(tap, edges, maxDistanceMeters: 700);
+    if (edge == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No nearby rail segment found')));
+      return;
+    }
+
+    await RailEdgeDao().toggleTravelled(edge.id!);
+    if (!mounted) return;
+    setState(() {
+      _mapDataFuture = _loadMapData();
+    });
+  }
+
+  RailEdge? _findNearestEdge(LatLng point, List<RailEdge> edges, {required double maxDistanceMeters}) {
+    RailEdge? best;
+    var bestDistance = double.infinity;
+
+    for (final edge in edges) {
+      if (edge.id == null) continue;
+      final a = LatLng(edge.startLat, edge.startLng);
+      final b = LatLng(edge.endLat, edge.endLng);
+      final nearest = _nearestPointOnSegment(point, a, b);
+      final distance = _distanceMeters(point, nearest);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = edge;
+      }
+    }
+
+    if (best == null || bestDistance > maxDistanceMeters) {
+      return null;
+    }
+    return best;
   }
 
   List<Polyline> _buildSegmentPolylines(List<List<LatLng>> lines, double zoom) {
@@ -378,6 +563,80 @@ class _MapPageState extends State<MapPage> {
     }
     return simplified;
   }
+
+  List<LatLng> _sliceRoutePoints(List<LatLng> points, int? startIdx, int? endIdx) {
+    if (points.length < 2) return points;
+    if (startIdx == null || endIdx == null) return points;
+
+    var a = startIdx;
+    var b = endIdx;
+    if (a > b) {
+      final t = a;
+      a = b;
+      b = t;
+    }
+
+    final start = a.clamp(0, points.length - 1);
+    final end = b.clamp(0, points.length - 1);
+    if (end - start < 1) return points;
+    return points.sublist(start, end + 1);
+  }
+
+  LatLng? _snapPointToRoute(LatLng point, List<List<LatLng>> routes, {required double maxDistanceMeters}) {
+    LatLng? bestPoint;
+    var bestDistance = double.infinity;
+
+    for (final route in routes) {
+      if (route.length < 2) continue;
+      for (var i = 0; i < route.length - 1; i++) {
+        final candidate = _nearestPointOnSegment(point, route[i], route[i + 1]);
+        final distance = _distanceMeters(point, candidate);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          bestPoint = candidate;
+        }
+      }
+    }
+
+    if (bestPoint == null || bestDistance > maxDistanceMeters) {
+      return null;
+    }
+    return bestPoint;
+  }
+
+  LatLng _nearestPointOnSegment(LatLng p, LatLng a, LatLng b) {
+    final ax = a.longitude;
+    final ay = a.latitude;
+    final bx = b.longitude;
+    final by = b.latitude;
+    final px = p.longitude;
+    final py = p.latitude;
+
+    final dx = bx - ax;
+    final dy = by - ay;
+    final len2 = (dx * dx) + (dy * dy);
+    if (len2 == 0) return a;
+
+    final t = (((px - ax) * dx) + ((py - ay) * dy)) / len2;
+    final clampedT = t.clamp(0.0, 1.0);
+    return LatLng(ay + (dy * clampedT), ax + (dx * clampedT));
+  }
+
+  double _distanceMeters(LatLng a, LatLng b) {
+    const r = 6371000.0;
+    final dLat = _toRadians(b.latitude - a.latitude);
+    final dLon = _toRadians(b.longitude - a.longitude);
+    final lat1 = _toRadians(a.latitude);
+    final lat2 = _toRadians(b.latitude);
+
+    final h =
+        (sin(dLat / 2) * sin(dLat / 2)) +
+        (sin(dLon / 2) * sin(dLon / 2) * cos(lat1) * cos(lat2));
+    final c = 2 * atan2(sqrt(h), sqrt(1 - h));
+    return r * c;
+  }
+
+  double _toRadians(double deg) => deg * 0.017453292519943295;
 
   LatLng _centroid(List<LatLng> points) {
     double lat = 0;
