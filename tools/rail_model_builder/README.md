@@ -26,6 +26,24 @@ python tools/rail_model_builder/build_rail_model.py \
   --output assets/rail/rail_edges_seed.json
 ```
 
+Enable more frequent telemetry during long runs:
+
+```bash
+python tools/rail_model_builder/build_rail_model.py \
+  --bbox 49.8,-8.6,60.9,1.8 \
+  --progress-every 5000 \
+  --output assets/rail/rail_edges_seed.json
+```
+
+Disable telemetry (summary only):
+
+```bash
+python tools/rail_model_builder/build_rail_model.py \
+  --bbox 49.8,-8.6,60.9,1.8 \
+  --quiet \
+  --output assets/rail/rail_edges_seed.json
+```
+
 This builder splits the rail graph into progression segments at:
 - rail junctions (graph nodes where degree != 2)
 - station-adjacent nodes (snapped within a threshold)

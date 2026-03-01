@@ -14,6 +14,7 @@ import argparse
 import csv
 import json
 import math
+import time
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
@@ -24,6 +25,19 @@ NodeKey = str
 EdgeTuple = Tuple[NodeKey, NodeKey]
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+
+
+class Telemetry:
+    def __init__(self, enabled: bool = True, progress_every: int = 20000):
+        self.enabled = enabled
+        self.progress_every = max(progress_every, 1)
+        self._started = time.perf_counter()
+
+    def log(self, message: str) -> None:
+        if not self.enabled:
+            return
+        elapsed = time.perf_counter() - self._started
+        print(f"[+{elapsed:8.1f}s] {message}")
 
 
 def parse_bbox(text: str) -> Tuple[float, float, float, float]:
@@ -66,7 +80,7 @@ def haversine_m(a: Coord, b: Coord) -> float:
 
 
 def fetch_osm_rail_lines_and_stations(
-    bbox: Tuple[float, float, float, float], timeout: int = 120
+    bbox: Tuple[float, float, float, float], telemetry: Telemetry, timeout: int = 120
 ) -> Tuple[List[List[Coord]], List[Coord]]:
     south, west, north, east = bbox
     query = f"""
@@ -77,13 +91,16 @@ def fetch_osm_rail_lines_and_stations(
 );
 out geom;
 """
+    telemetry.log(f"Overpass request started for bbox={bbox}")
     response = requests.post(OVERPASS_URL, data={"data": query}, timeout=timeout)
     response.raise_for_status()
     data = response.json()
+    telemetry.log(f"Overpass response received ({len(data.get('elements', []))} elements)")
 
     lines: List[List[Coord]] = []
     stations: List[Coord] = []
-    for element in data.get("elements", []):
+    elements = data.get("elements", [])
+    for idx, element in enumerate(elements, start=1):
         etype = element.get("type")
         if etype == "way":
             geom = element.get("geometry") or []
@@ -101,6 +118,11 @@ out geom;
             lon = element.get("lon")
             if lat is not None and lon is not None:
                 stations.append((float(lat), float(lon)))
+
+        if idx % telemetry.progress_every == 0:
+            telemetry.log(f"Parsed Overpass elements: {idx}/{len(elements)}")
+
+    telemetry.log(f"OSM parse complete: {len(lines)} rail lines, {len(stations)} station nodes")
 
     return lines, stations
 
@@ -190,11 +212,13 @@ def parse_opentraintimes_csv(path: Path) -> List[List[Coord]]:
     return lines
 
 
-def build_graph(lines: Iterable[List[Coord]]) -> Tuple[Dict[NodeKey, Set[NodeKey]], Set[EdgeTuple]]:
+def build_graph(lines: Iterable[List[Coord]], telemetry: Telemetry) -> Tuple[Dict[NodeKey, Set[NodeKey]], Set[EdgeTuple]]:
     adjacency: Dict[NodeKey, Set[NodeKey]] = {}
     edges: Set[EdgeTuple] = set()
 
+    line_count = 0
     for line in lines:
+        line_count += 1
         if len(line) < 2:
             continue
         keys = [node_key(p) for p in line]
@@ -210,28 +234,60 @@ def build_graph(lines: Iterable[List[Coord]]) -> Tuple[Dict[NodeKey, Set[NodeKey
             adjacency.setdefault(a, set()).add(b)
             adjacency.setdefault(b, set()).add(a)
 
+        if line_count % telemetry.progress_every == 0:
+            telemetry.log(f"Graph build progress: lines={line_count}, nodes={len(adjacency)}, edges={len(edges)}")
+
+    telemetry.log(f"Graph build complete: lines={line_count}, nodes={len(adjacency)}, edges={len(edges)}")
+
     return adjacency, edges
 
 
 def station_break_nodes(
-    adjacency: Dict[NodeKey, Set[NodeKey]], stations: List[Coord], threshold_m: float
+    adjacency: Dict[NodeKey, Set[NodeKey]], stations: List[Coord], threshold_m: float, telemetry: Telemetry
 ) -> Set[NodeKey]:
     node_coords = {k: coord_from_key(k) for k in adjacency.keys()}
     breaks: Set[NodeKey] = set()
     if not stations:
         return breaks
 
-    node_items = list(node_coords.items())
-    for station in stations:
+    threshold_lat = threshold_m / 111320.0
+    threshold_lat = max(threshold_lat, 1e-6)
+
+    grid: Dict[Tuple[int, int], List[Tuple[NodeKey, Coord]]] = {}
+    for key, coord in node_coords.items():
+        lat, lng = coord
+        cell = (int(lat / threshold_lat), int(lng / threshold_lat))
+        grid.setdefault(cell, []).append((key, coord))
+
+    telemetry.log(f"Station snapping index built: {len(grid)} grid cells")
+
+    matched = 0
+    for index, station in enumerate(stations, start=1):
+        s_lat, s_lng = station
+        cell = (int(s_lat / threshold_lat), int(s_lng / threshold_lat))
+        candidates: List[Tuple[NodeKey, Coord]] = []
+        for d_lat in (-1, 0, 1):
+            for d_lng in (-1, 0, 1):
+                candidates.extend(grid.get((cell[0] + d_lat, cell[1] + d_lng), []))
+
+        if not candidates:
+            continue
+
         best_key: Optional[NodeKey] = None
         best_dist = float("inf")
-        for key, coord in node_items:
+        for key, coord in candidates:
             d = haversine_m(station, coord)
             if d < best_dist:
                 best_dist = d
                 best_key = key
         if best_key is not None and best_dist <= threshold_m:
             breaks.add(best_key)
+            matched += 1
+
+        if index % max(250, telemetry.progress_every // 20) == 0:
+            telemetry.log(f"Station snapping: processed={index}/{len(stations)}, matched={matched}, break_nodes={len(breaks)}")
+
+    telemetry.log(f"Station snapping complete: matched={matched}/{len(stations)}, break_nodes={len(breaks)}")
     return breaks
 
 
@@ -239,6 +295,7 @@ def segment_graph(
     adjacency: Dict[NodeKey, Set[NodeKey]],
     edges: Set[EdgeTuple],
     extra_break_nodes: Set[NodeKey],
+    telemetry: Telemetry,
 ) -> List[List[NodeKey]]:
     if not edges:
         return []
@@ -275,7 +332,9 @@ def segment_graph(
         return path
 
     start_nodes = [n for n in adjacency.keys() if n in breaks] + [n for n in adjacency.keys() if n not in breaks]
+    processed = 0
     for node in start_nodes:
+        processed += 1
         for neighbor in adjacency.get(node, set()):
             e = canonical_edge(node, neighbor)
             if e in visited:
@@ -284,17 +343,25 @@ def segment_graph(
             if len(seg) >= 2:
                 segments.append(seg)
 
+        if processed % telemetry.progress_every == 0:
+            telemetry.log(
+                f"Segment walk progress: start_nodes={processed}/{len(start_nodes)}, "
+                f"segments={len(segments)}, visited_edges={len(visited)}"
+            )
+
     for a, b in edges:
         if (a, b) not in visited:
             segments.append([a, b])
 
+    telemetry.log(f"Segment walk complete: segments={len(segments)}, visited_edges={len(visited)}")
+
     return segments
 
 
-def segments_to_seed(segments: List[List[NodeKey]]) -> List[Dict]:
+def segments_to_seed(segments: List[List[NodeKey]], telemetry: Telemetry) -> List[Dict]:
     rows: Dict[str, Dict] = {}
     segment_id = 1
-    for seg in segments:
+    for idx, seg in enumerate(segments, start=1):
         if len(seg) < 2:
             continue
         for i in range(len(seg) - 1):
@@ -316,6 +383,11 @@ def segments_to_seed(segments: List[List[NodeKey]]) -> List[Dict]:
             }
         segment_id += 1
 
+        if idx % telemetry.progress_every == 0:
+            telemetry.log(f"Seed rows progress: segments={idx}/{len(segments)}, unique_edges={len(rows)}")
+
+    telemetry.log(f"Seed rows complete: unique_edges={len(rows)}")
+
     return sorted(rows.values(), key=lambda x: x["edge_key"])
 
 
@@ -324,20 +396,28 @@ def build_seed(
     extra_geojson: List[Path],
     opentraintimes_csv: Optional[Path],
     station_snap_m: float,
+    telemetry: Telemetry,
 ) -> List[Dict]:
-    osm_lines, stations = fetch_osm_rail_lines_and_stations(bbox)
+    telemetry.log("Build started")
+    osm_lines, stations = fetch_osm_rail_lines_and_stations(bbox, telemetry=telemetry)
     all_lines = list(osm_lines)
 
     for path in extra_geojson:
+        before = len(all_lines)
         all_lines.extend(parse_geojson_lines(path))
+        telemetry.log(f"Merged GeoJSON {path}: +{len(all_lines)-before} lines")
 
     if opentraintimes_csv:
+        before = len(all_lines)
         all_lines.extend(parse_opentraintimes_csv(opentraintimes_csv))
+        telemetry.log(f"Merged OpenTrainTimes CSV {opentraintimes_csv}: +{len(all_lines)-before} lines")
 
-    adjacency, edges = build_graph(all_lines)
-    extra_breaks = station_break_nodes(adjacency, stations, station_snap_m)
-    segments = segment_graph(adjacency, edges, extra_breaks)
-    return segments_to_seed(segments)
+    telemetry.log(f"Total input lines for graph: {len(all_lines)}")
+
+    adjacency, edges = build_graph(all_lines, telemetry=telemetry)
+    extra_breaks = station_break_nodes(adjacency, stations, station_snap_m, telemetry=telemetry)
+    segments = segment_graph(adjacency, edges, extra_breaks, telemetry=telemetry)
+    return segments_to_seed(segments, telemetry=telemetry)
 
 
 def main() -> None:
@@ -361,6 +441,17 @@ def main() -> None:
         default=120.0,
         help="max meters to snap station points onto nearest graph node for segmentation",
     )
+    parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=20000,
+        help="telemetry print frequency for large loops",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="disable telemetry logs and print only final summary",
+    )
 
     args = parser.parse_args()
 
@@ -368,15 +459,18 @@ def main() -> None:
     output_path = Path(args.output)
     extra_geojson = [Path(p) for p in args.extra_geojson]
     opentraintimes_csv = Path(args.opentraintimes_csv) if args.opentraintimes_csv else None
+    telemetry = Telemetry(enabled=not args.quiet, progress_every=args.progress_every)
 
     seed = build_seed(
         bbox=bbox,
         extra_geojson=extra_geojson,
         opentraintimes_csv=opentraintimes_csv,
         station_snap_m=args.station_snap_m,
+        telemetry=telemetry,
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    telemetry.log(f"Writing output file: {output_path}")
     output_path.write_text(json.dumps(seed, indent=2), encoding="utf-8")
 
     print(f"Wrote {len(seed)} edges to {output_path}")
