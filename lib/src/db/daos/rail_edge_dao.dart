@@ -90,6 +90,54 @@ class RailEdgeDao {
     await batch.commit(noResult: true);
   }
 
+  Future<void> replaceWithSeedEdges(List<RailEdge> edges, {bool preserveTravelled = true}) async {
+    final db = await _db;
+    await _ensureSchema(db);
+
+    await db.transaction((txn) async {
+      final travelledByKey = <String, int>{};
+      if (preserveTravelled) {
+        final current = await txn.query('rail_edges', columns: ['edge_key', 'travelled']);
+        for (final row in current) {
+          final edgeKey = (row['edge_key'] as String?)?.trim();
+          if (edgeKey == null || edgeKey.isEmpty) continue;
+          final travelled = ((row['travelled'] as num?)?.toInt() ?? 0) == 1 ? 1 : 0;
+          if (travelled == 1) {
+            travelledByKey[edgeKey] = 1;
+          }
+        }
+      }
+
+      await txn.delete('rail_edges');
+      if (edges.isEmpty) return;
+
+      final batch = txn.batch();
+      for (final edge in edges) {
+        final travelled = preserveTravelled
+            ? (travelledByKey[edge.edgeKey] ?? (edge.travelled ? 1 : 0))
+            : (edge.travelled ? 1 : 0);
+
+        batch.rawInsert(
+          '''
+          INSERT INTO rail_edges(
+            edge_key, start_lat, start_lng, end_lat, end_lng, source_route_id, travelled
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)
+          ''',
+          [
+            edge.edgeKey,
+            edge.startLat,
+            edge.startLng,
+            edge.endLat,
+            edge.endLng,
+            edge.sourceRouteId,
+            travelled,
+          ],
+        );
+      }
+      await batch.commit(noResult: true);
+    });
+  }
+
   Future<List<RailEdge>> getAllEdges() async {
     final db = await _db;
     await _ensureSchema(db);
