@@ -51,13 +51,6 @@ class JourneyDao {
         AND ss.longitude IS NOT NULL
         AND es.latitude IS NOT NULL
         AND es.longitude IS NOT NULL
-        AND NOT EXISTS (
-          SELECT 1
-          FROM journey_segments js
-          WHERE js.journey_id = j.id
-            AND js.geometry_wkt IS NOT NULL
-            AND LENGTH(TRIM(js.geometry_wkt)) > 0
-        )
       ORDER BY j.date DESC, j.id DESC
     ''');
     return rows;

@@ -9,20 +9,28 @@ class RailNetworkSeed {
   static const _prefSeedFingerprint = 'rail.seed.fingerprint.v1';
   static const _prefSeedCount = 'rail.seed.count.v1';
   static const _prefSeedSchemaVersion = 'rail.seed.schema.version.v1';
-  static const _seedSchemaVersion = 2;
+  static const _seedSchemaVersion = 3;
+  static const _minExpectedSeedEdges = 1000;
 
   static Future<void> ensureLoaded({bool force = false}) async {
     final dao = RailEdgeDao();
     final raw = await rootBundle.loadString(_assetPath);
     final seedEdges = _parseSeedEdges(raw);
-    if (seedEdges.isEmpty) return;
+    final dbCount = await dao.getEdgeCount();
+
+    if (seedEdges.length < _minExpectedSeedEdges) {
+      if (dbCount > 0 && dbCount <= _minExpectedSeedEdges) {
+        await dao.replaceWithSeedEdges(const <RailEdge>[], preserveTravelled: false);
+      }
+      return;
+    }
+
     final fingerprint = _fnv1a32Hex(raw);
 
     final prefs = await SharedPreferences.getInstance();
     final previousFingerprint = prefs.getString(_prefSeedFingerprint);
     final previousSeedCount = prefs.getInt(_prefSeedCount);
     final previousSchemaVersion = prefs.getInt(_prefSeedSchemaVersion) ?? 0;
-    final dbCount = await dao.getEdgeCount();
 
     final needsReseed =
         force ||
@@ -44,7 +52,7 @@ class RailNetworkSeed {
     final decoded = jsonDecode(raw);
     if (decoded is! List) return const <RailEdge>[];
 
-    final seedEdges = <RailEdge>[];
+    final seedByKey = <String, RailEdge>{};
     for (final entry in decoded) {
       if (entry is! Map) continue;
       final startLat = (entry['start_lat'] as num?)?.toDouble();
@@ -58,8 +66,9 @@ class RailNetworkSeed {
       if (startLat == null || startLng == null || endLat == null || endLng == null) continue;
       if (edgeKey == null || edgeKey.isEmpty) continue;
 
-      seedEdges.add(
-        RailEdge(
+      final existing = seedByKey[edgeKey];
+      if (existing == null) {
+        seedByKey[edgeKey] = RailEdge(
           edgeKey: edgeKey,
           startLat: startLat,
           startLng: startLng,
@@ -67,11 +76,22 @@ class RailNetworkSeed {
           endLng: endLng,
           sourceRouteId: sourceRouteId,
           travelled: travelled,
-        ),
+        );
+        continue;
+      }
+
+      seedByKey[edgeKey] = RailEdge(
+        edgeKey: edgeKey,
+        startLat: existing.startLat,
+        startLng: existing.startLng,
+        endLat: existing.endLat,
+        endLng: existing.endLng,
+        sourceRouteId: existing.sourceRouteId ?? sourceRouteId,
+        travelled: existing.travelled || travelled,
       );
     }
 
-    return seedEdges;
+    return seedByKey.values.toList(growable: false);
   }
 
   static String _fnv1a32Hex(String input) {

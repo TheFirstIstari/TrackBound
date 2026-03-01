@@ -140,6 +140,30 @@ class _MapPageState extends State<MapPage> {
     });
   }
 
+  Future<void> _resetAllTravelled() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Reset Progress'),
+        content: const Text('Set all rail segments to untravelled?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Reset')),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    final changed = await RailEdgeDao().resetAllTravelled();
+    if (!mounted) return;
+
+    _refreshMapData();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Reset travelled status on $changed segment(s)')),
+    );
+  }
+
   Future<_MapData> _loadMapDataWithSeed({bool forceReseed = false}) async {
     await RailNetworkSeed.ensureLoaded(force: forceReseed);
     return _loadMapData();
@@ -187,6 +211,11 @@ class _MapPageState extends State<MapPage> {
             onPressed: () => setState(() => _markTravelMode = !_markTravelMode),
             icon: Icon(_markTravelMode ? Icons.playlist_add_check_circle : Icons.playlist_add_check),
             tooltip: _markTravelMode ? 'Mark travelled mode: on' : 'Mark travelled mode: off',
+          ),
+          IconButton(
+            onPressed: _resetAllTravelled,
+            icon: const Icon(Icons.restart_alt),
+            tooltip: 'Reset travelled segments',
           ),
           IconButton(
             onPressed: _showControlsHelp,
@@ -307,9 +336,11 @@ class _MapPageState extends State<MapPage> {
               SizedBox(height: 6),
               Text('• Mark travelled toggle: tap near a rail edge to mark/unmark travelled.'),
               SizedBox(height: 6),
+              Text('• Reset (restart icon): sets all rail segments to untravelled.'),
+              SizedBox(height: 6),
               Text('• Drawing on the map is deprecated in this version.'),
               SizedBox(height: 6),
-              Text('• Refresh: reloads DB-backed map layers.'),
+              Text('• Refresh: rechecks bundled rail seed and reloads DB-backed map layers.'),
             ],
           ),
         ),
@@ -340,38 +371,41 @@ class _MapPageState extends State<MapPage> {
     final railGraph = _buildRailGraph(railEdges);
     _pathCache.clear();
 
-    final segmentLines = <List<LatLng>>[
-      ...segments
-        .map((s) {
-          final explicit = _parseWktLineString(s.geometryWkt);
-          if (explicit.isNotEmpty) {
-            if (explicit.length == 2) {
-              final graphPath = _findPathOnRailGraph(explicit.first, explicit.last, railGraph);
-              if (graphPath.length >= 2) {
-                return graphPath;
-              }
-            }
-            return explicit;
-          }
+    final segmentLines = <List<LatLng>>[];
+    final renderedJourneyIds = <int>{};
 
-          if (s.routeId != null) {
-            final routePoints = routeById[s.routeId!];
-            if (routePoints != null && routePoints.length >= 2) {
-              final sliced = _sliceRoutePoints(routePoints, s.startPointIndex, s.endPointIndex);
-              if (sliced.length >= 2) {
-                return sliced;
-              }
-              return routePoints;
-            }
-          }
+    for (final s in segments) {
+      // Deprecated: direct segment geometry rendering (historical drawn straight lines).
+      // Keep only route-linked segments and snap them to the rail graph.
+      if (s.routeId == null) {
+        continue;
+      }
 
-          return <LatLng>[];
-        })
-        .where((points) => points.isNotEmpty)
-        .toList(),
-    ];
+      final routePoints = routeById[s.routeId!];
+      if (routePoints == null || routePoints.length < 2) {
+        continue;
+      }
+
+      final candidate = _sliceRoutePoints(routePoints, s.startPointIndex, s.endPointIndex);
+      if (candidate.length < 2) {
+        continue;
+      }
+
+      final snapped = _snapPolylineToRailGraph(candidate, railGraph);
+      if (snapped.length < 2) {
+        continue;
+      }
+
+      segmentLines.add(snapped);
+      renderedJourneyIds.add(s.journeyId);
+    }
 
     for (final row in fallbackLines) {
+      final journeyId = (row['id'] as num?)?.toInt();
+      if (journeyId != null && renderedJourneyIds.contains(journeyId)) {
+        continue;
+      }
+
       final sLat = (row['start_lat'] as num?)?.toDouble();
       final sLng = (row['start_lng'] as num?)?.toDouble();
       final eLat = (row['end_lat'] as num?)?.toDouble();
@@ -382,8 +416,6 @@ class _MapPageState extends State<MapPage> {
       final graphPath = _findPathOnRailGraph(start, end, railGraph);
       if (graphPath.length >= 2) {
         segmentLines.add(graphPath);
-      } else {
-        segmentLines.add([start, end]);
       }
     }
 
@@ -736,6 +768,28 @@ class _MapPageState extends State<MapPage> {
     }
 
     return const <LatLng>[];
+  }
+
+  List<LatLng> _snapPolylineToRailGraph(List<LatLng> points, _RailGraph graph) {
+    if (points.length < 2) return const <LatLng>[];
+
+    final snapped = <LatLng>[];
+    for (var i = 0; i < points.length - 1; i++) {
+      final start = points[i];
+      final end = points[i + 1];
+      final graphPath = _findPathOnRailGraph(start, end, graph);
+      if (graphPath.length < 2) {
+        return const <LatLng>[];
+      }
+
+      if (snapped.isEmpty) {
+        snapped.addAll(graphPath);
+      } else {
+        snapped.addAll(graphPath.skip(1));
+      }
+    }
+
+    return snapped;
   }
 
   List<LatLng> _reconstructPath(Map<String, String> cameFrom, String current, _RailGraph graph) {

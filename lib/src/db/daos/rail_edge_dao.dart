@@ -170,4 +170,12 @@ class RailEdgeDao {
       [nextValue, sourceRouteId],
     );
   }
+
+  Future<int> resetAllTravelled() async {
+    final db = await _db;
+    await _ensureSchema(db);
+    return await db.rawUpdate(
+      'UPDATE rail_edges SET travelled = 0 WHERE travelled != 0',
+    );
+  }
 }
