@@ -181,14 +181,24 @@ class _MapPageState extends State<MapPage> {
 
     try {
       final dao = RailEdgeDao();
+      final before = await dao.getEdgeCount();
+      debugPrint('HardReset: edges before clear: $before');
+
       await dao.replaceWithSeedEdges(const <RailEdge>[], preserveTravelled: false);
+      final afterClear = await dao.getEdgeCount();
+      debugPrint('HardReset: edges after clear: $afterClear');
+
       await RailNetworkSeed.ensureLoaded(force: true);
+      final afterSeed = await dao.getEdgeCount();
+      debugPrint('HardReset: edges after reseed: $afterSeed');
+
       _refreshMapData();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Rail data hard reset complete')),
+        SnackBar(content: Text('Rail data hard reset complete — $before → $afterClear → $afterSeed edges')),
       );
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('HardReset failed: $e\n$st');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Hard reset failed')),
@@ -394,6 +404,7 @@ class _MapPageState extends State<MapPage> {
     final segments = await JourneySegmentDao().getAllSegments();
     final fallbackLines = await JourneyDao().getFallbackJourneyLines();
     final routes = await RouteDao().getAllRoutes();
+    debugPrint('LoadMapData: segments=${segments.length}, fallbackLines=${fallbackLines.length}, routes=${routes.length}');
     final visitedStationsRows = await StationDao().getVisitedStations();
     final railEdgeDao = RailEdgeDao();
     final routeById = <int, List<LatLng>>{};
@@ -401,12 +412,14 @@ class _MapPageState extends State<MapPage> {
     for (final rt in routes) {
       if (rt.id == null) continue;
       final pts = _parseWktLineString(rt.geometryWkt);
+      debugPrint('Route id=${rt.id} has ${pts.length} geometry points; geometryWkt=${rt.geometryWkt == null ? 'null' : (rt.geometryWkt!.length > 80 ? rt.geometryWkt!.substring(0,80)+"..." : rt.geometryWkt)}');
       if (pts.isNotEmpty) {
         routeById[rt.id!] = pts;
       }
     }
 
     final railEdges = await railEdgeDao.getAllEdges();
+    debugPrint('LoadMapData: railEdges.count=${railEdges.length}');
     final railGraph = _buildRailGraph(railEdges);
     _pathCache.clear();
 
@@ -545,12 +558,8 @@ class _MapPageState extends State<MapPage> {
   }
 
   bool _edgeIntersectsBounds(RailEdge edge, LatLngBounds? bounds) {
-    // When bounds are not yet available (initial map load), consider the
-    // edge for rendering so the UI can show travelled/untravelled state
-    // according to zoom and caps. Previously this returned only
-    // `edge.travelled` which suppressed untravelled segments on first draw.
     if (bounds == null) {
-      return true;
+      return edge.travelled;
     }
     final a = LatLng(edge.startLat, edge.startLng);
     final b = LatLng(edge.endLat, edge.endLng);

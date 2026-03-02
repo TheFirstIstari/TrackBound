@@ -18,11 +18,19 @@ class RailNetworkSeed {
     final seedEdges = _parseSeedEdges(raw);
     final dbCount = await dao.getEdgeCount();
 
+    // If the bundled seed looks unexpectedly small, normally refuse to
+    // apply it to avoid corrupting a previously-seeded DB. When the
+    // caller explicitly requests a forced reseed (`force == true`),
+    // bypass this guard so devs can re-apply a bundled asset during
+    // testing or recovery flows.
     if (seedEdges.length < _minExpectedSeedEdges) {
-      if (dbCount > 0 && dbCount <= _minExpectedSeedEdges) {
-        await dao.replaceWithSeedEdges(const <RailEdge>[], preserveTravelled: false);
+      if (!force) {
+        if (dbCount > 0 && dbCount <= _minExpectedSeedEdges) {
+          await dao.replaceWithSeedEdges(const <RailEdge>[], preserveTravelled: false);
+        }
+        return;
       }
-      return;
+      // When forcing, continue and allow reseed even for small seeds.
     }
 
     final fingerprint = _fnv1a32Hex(raw);
