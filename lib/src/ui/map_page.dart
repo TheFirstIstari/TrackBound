@@ -545,8 +545,12 @@ class _MapPageState extends State<MapPage> {
   }
 
   bool _edgeIntersectsBounds(RailEdge edge, LatLngBounds? bounds) {
+    // When bounds are not yet available (initial map load), consider the
+    // edge for rendering so the UI can show travelled/untravelled state
+    // according to zoom and caps. Previously this returned only
+    // `edge.travelled` which suppressed untravelled segments on first draw.
     if (bounds == null) {
-      return edge.travelled;
+      return true;
     }
     final a = LatLng(edge.startLat, edge.startLng);
     final b = LatLng(edge.endLat, edge.endLng);
