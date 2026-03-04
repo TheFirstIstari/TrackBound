@@ -125,7 +125,7 @@ class _JourneyEntryPageState extends State<JourneyEntryPage> {
     super.dispose();
   }
 
-  void _submit() {
+  Future<void> _submit() async {
     if (_formKey.currentState?.validate() ?? false) {
       final journey = Journey(
         date: _dateCtrl.text,
@@ -138,7 +138,8 @@ class _JourneyEntryPageState extends State<JourneyEntryPage> {
         distanceM: null,
       );
 
-      JourneyDao().insertJourney(journey).then((id) async {
+      try {
+        final id = await JourneyDao().insertJourney(journey);
         int? startId;
         int? endId;
         final stationDao = StationDao();
@@ -176,15 +177,17 @@ class _JourneyEntryPageState extends State<JourneyEntryPage> {
             final seg = JourneySegment(journeyId: id, routeId: _selectedRouteId);
             await JourneySegmentDao().insertSegment(seg);
           }
-        } catch (e) {
+        } catch (_) {
           // ignore station/segment save errors
         }
 
+        if (!context.mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Journey saved')));
         Navigator.pop(context);
-      }).catchError((e) {
+      } catch (e) {
+        if (!context.mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Save failed: $e')));
-      });
+      }
     }
   }
 

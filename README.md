@@ -15,7 +15,7 @@ TrackBound is a Flutter app for railway enthusiasts to log, visualise and share 
 
 - Direct map drawing is deprecated and not available in the current UI.
 - Route progression is tracked by rail-edge toggling on the bundled/imported rail network.
-
+ 
 ## Bundled rail network seed
 
 - The app ships with precomputed rail edges in `assets/rail/rail_edges_seed.json`.

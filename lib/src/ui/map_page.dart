@@ -412,7 +412,9 @@ class _MapPageState extends State<MapPage> {
     for (final rt in routes) {
       if (rt.id == null) continue;
       final pts = _parseWktLineString(rt.geometryWkt);
-      debugPrint('Route id=${rt.id} has ${pts.length} geometry points; geometryWkt=${rt.geometryWkt == null ? 'null' : (rt.geometryWkt!.length > 80 ? rt.geometryWkt!.substring(0,80)+"..." : rt.geometryWkt)}');
+      debugPrint(
+        'Route id=${rt.id} has ${pts.length} geometry points; geometryWkt=${rt.geometryWkt == null ? 'null' : (rt.geometryWkt!.length > 80 ? '${rt.geometryWkt!.substring(0, 80)}...' : rt.geometryWkt)}',
+      );
       if (pts.isNotEmpty) {
         routeById[rt.id!] = pts;
       }
