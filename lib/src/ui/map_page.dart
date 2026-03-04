@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:flutter_map_tile_caching/flutter_map_tile_caching.dart';
@@ -94,12 +93,6 @@ class _MapPageState extends State<MapPage> {
   final Map<String, List<LatLng>> _pathCache = <String, List<LatLng>>{};
   late Future<_MapData> _mapDataFuture;
 
-  void _logDebug(String message) {
-    if (kDebugMode) {
-      debugPrint(message);
-    }
-  }
-
   @override
   void initState() {
     super.initState();
@@ -189,15 +182,15 @@ class _MapPageState extends State<MapPage> {
     try {
       final dao = RailEdgeDao();
       final before = await dao.getEdgeCount();
-      _logDebug('HardReset: edges before clear: $before');
+      debugPrint('HardReset: edges before clear: $before');
 
       await dao.replaceWithSeedEdges(const <RailEdge>[], preserveTravelled: false);
       final afterClear = await dao.getEdgeCount();
-      _logDebug('HardReset: edges after clear: $afterClear');
+      debugPrint('HardReset: edges after clear: $afterClear');
 
       await RailNetworkSeed.ensureLoaded(force: true);
       final afterSeed = await dao.getEdgeCount();
-      _logDebug('HardReset: edges after reseed: $afterSeed');
+      debugPrint('HardReset: edges after reseed: $afterSeed');
 
       _refreshMapData();
       if (!mounted) return;
@@ -205,7 +198,7 @@ class _MapPageState extends State<MapPage> {
         SnackBar(content: Text('Rail data hard reset complete — $before → $afterClear → $afterSeed edges')),
       );
     } catch (e, st) {
-      _logDebug('HardReset failed: $e\n$st');
+      debugPrint('HardReset failed: $e\n$st');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Hard reset failed')),
@@ -411,7 +404,7 @@ class _MapPageState extends State<MapPage> {
     final segments = await JourneySegmentDao().getAllSegments();
     final fallbackLines = await JourneyDao().getFallbackJourneyLines();
     final routes = await RouteDao().getAllRoutes();
-    _logDebug('LoadMapData: segments=${segments.length}, fallbackLines=${fallbackLines.length}, routes=${routes.length}');
+    debugPrint('LoadMapData: segments=${segments.length}, fallbackLines=${fallbackLines.length}, routes=${routes.length}');
     final visitedStationsRows = await StationDao().getVisitedStations();
     final railEdgeDao = RailEdgeDao();
     final routeById = <int, List<LatLng>>{};
@@ -419,7 +412,7 @@ class _MapPageState extends State<MapPage> {
     for (final rt in routes) {
       if (rt.id == null) continue;
       final pts = _parseWktLineString(rt.geometryWkt);
-      _logDebug(
+      debugPrint(
         'Route id=${rt.id} has ${pts.length} geometry points; geometryWkt=${rt.geometryWkt == null ? 'null' : (rt.geometryWkt!.length > 80 ? '${rt.geometryWkt!.substring(0, 80)}...' : rt.geometryWkt)}',
       );
       if (pts.isNotEmpty) {
@@ -428,7 +421,7 @@ class _MapPageState extends State<MapPage> {
     }
 
     final railEdges = await railEdgeDao.getAllEdges();
-    _logDebug('LoadMapData: railEdges.count=${railEdges.length}');
+    debugPrint('LoadMapData: railEdges.count=${railEdges.length}');
     final railGraph = _buildRailGraph(railEdges);
     _pathCache.clear();
 
