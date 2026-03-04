@@ -127,6 +127,7 @@ class _JourneyEntryPageState extends State<JourneyEntryPage> {
 
   Future<void> _submit() async {
     if (_formKey.currentState?.validate() ?? false) {
+      final ctx = context;
       final journey = Journey(
         date: _dateCtrl.text,
         startStationId: null,
@@ -181,12 +182,12 @@ class _JourneyEntryPageState extends State<JourneyEntryPage> {
           // ignore station/segment save errors
         }
 
-        if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Journey saved')));
-        Navigator.pop(context);
+        if (!ctx.mounted) return;
+        ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(content: Text('Journey saved')));
+        Navigator.pop(ctx);
       } catch (e) {
-        if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Save failed: $e')));
+        if (!ctx.mounted) return;
+        ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('Save failed: $e')));
       }
     }
   }

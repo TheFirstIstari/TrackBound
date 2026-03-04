@@ -58,16 +58,15 @@ class _RoutesPageState extends State<RoutesPage> {
   Future<void> _exportGpx(TrainRoute r) async {
     final gpx = routeToGpx(r);
     // show as share/copy dialog — for now display the GPX text in a dialog with copy option
-    final copied = await showDialog<bool?>(context: context, builder: (ctx) {
+    await showDialog<void>(context: context, builder: (ctx) {
       return AlertDialog(
         title: const Text('Export GPX'),
         content: SizedBox(width: 400, height: 300, child: SingleChildScrollView(child: SelectableText(gpx))),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Close')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
         ],
       );
     });
-    (copied); // noop
   }
 
   void _selectForJourney(TrainRoute r) {
